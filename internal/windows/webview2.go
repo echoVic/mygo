@@ -33,34 +33,35 @@ const (
 	ctl2PutDefaultBackgroundColor        = 27
 
 	// ICoreWebView2
-	wvGetSettings                         = 3
-	wvGetSource                           = 4
-	wvNavigate                            = 5
-	wvNavigateToString                    = 6
-	wvAddNavigationStarting               = 7
-	wvAddContentLoading                   = 9
-	wvAddPermissionRequested              = 23
-	wvAddNavigationCompleted              = 15
-	wvAddProcessFailed                    = 25
-	wvAddScriptToExecuteOnDocumentCreated = 27
-	wvExecuteScript                       = 29
-	wvCapturePreview                      = 30
-	wvReload                              = 31
-	wvAddWebMessageReceived               = 34
-	wvCallDevToolsProtocolMethod          = 36
-	wvGetCanGoBack                        = 38
-	wvGetCanGoForward                     = 39
-	wvGoBack                              = 40
-	wvGoForward                           = 41
-	wvStop                                = 43
-	wvAddNewWindowRequested               = 44
-	wvAddDocumentTitleChanged             = 46
-	wvGetDocumentTitle                    = 48
-	wvOpenDevToolsWindow                  = 51
-	wvAddWebResourceRequested             = 55
-	wvAddWebResourceRequestedFilter       = 57
-	wvRemoveWebResourceRequestedFilter    = 58
-	wvAddWindowCloseRequested             = 59
+	wvGetSettings                            = 3
+	wvGetSource                              = 4
+	wvNavigate                               = 5
+	wvNavigateToString                       = 6
+	wvAddNavigationStarting                  = 7
+	wvAddContentLoading                      = 9
+	wvAddPermissionRequested                 = 23
+	wvAddNavigationCompleted                 = 15
+	wvAddProcessFailed                       = 25
+	wvAddScriptToExecuteOnDocumentCreated    = 27
+	wvRemoveScriptToExecuteOnDocumentCreated = 28
+	wvExecuteScript                          = 29
+	wvCapturePreview                         = 30
+	wvReload                                 = 31
+	wvAddWebMessageReceived                  = 34
+	wvCallDevToolsProtocolMethod             = 36
+	wvGetCanGoBack                           = 38
+	wvGetCanGoForward                        = 39
+	wvGoBack                                 = 40
+	wvGoForward                              = 41
+	wvStop                                   = 43
+	wvAddNewWindowRequested                  = 44
+	wvAddDocumentTitleChanged                = 46
+	wvGetDocumentTitle                       = 48
+	wvOpenDevToolsWindow                     = 51
+	wvAddWebResourceRequested                = 55
+	wvAddWebResourceRequestedFilter          = 57
+	wvRemoveWebResourceRequestedFilter       = 58
+	wvAddWindowCloseRequested                = 59
 
 	// ICoreWebView2Settings, ICoreWebView2Settings2
 	setPutIsScriptEnabled                = 4
@@ -198,7 +199,7 @@ func createEnvironment(userData string, done func(env uintptr, err error)) error
 // loaderProc returns the official WebView2 loader next to the executable and
 // its CreateCoreWebView2EnvironmentWithOptions, or nil when there is no
 // loader to use. createEnvironment calls what it returns, and
-// WebViewSupported asks for it, so the two cannot disagree: a DLL of that
+// WebViewAvailable asks for it, so the two cannot disagree: a DLL of that
 // name with no such export is no loader, and a runtime is looked for
 // instead.
 func loaderProc() *syscall.LazyProc {
@@ -217,14 +218,18 @@ func loaderProc() *syscall.LazyProc {
 	return proc
 }
 
-// WebViewSupported reports whether a window showing a web page can have
+// WebViewAvailable reports whether a window showing a web page can have
 // one: the WebView2 Runtime is installed, or a loader next to the
 // executable loads a fixed version runtime or the installed one itself. It
 // starts nothing; once a window showing a page created the environment, it
-// says whether that worked.
-func (b *Backend) WebViewSupported() bool {
-	if b.env != 0 || b.envErr != nil {
-		return b.envErr == nil
+// says whether that worked. It reads the registry and the disk only, so any
+// goroutine may call it, before Init too.
+func (b *Backend) WebViewAvailable() bool {
+	switch b.envResult.Load() {
+	case 1:
+		return true
+	case 2:
+		return false
 	}
 	if loaderProc() != nil {
 		return true

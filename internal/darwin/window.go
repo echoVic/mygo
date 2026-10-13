@@ -350,23 +350,7 @@ func (w *window) createWebView(content NSRect) {
 	// the bridge configuration never leak between windows.
 	w.ucc = alloc("WKUserContentController")
 	send(w.ucc, "addScriptMessageHandler:name:", uintptr(w.delegate), uintptr(nsString("mygo")))
-	for _, s := range o.UserScripts {
-		injection := uintptr(0) // WKUserScriptInjectionTimeAtDocumentStart
-		if s.AtDocumentEnd {
-			injection = 1
-		}
-		script := send(send(class("WKUserScript"), "alloc"), "initWithSource:injectionTime:forMainFrameOnly:",
-			uintptr(nsString(s.Source)), injection, boolArg(!s.AllFrames))
-		send(w.ucc, "addUserScript:", uintptr(script))
-		release(script)
-	}
-	if w.hiddenTitleBar() {
-		// After the bridge, which it tells: the room of the traffic lights.
-		script := send(send(class("WKUserScript"), "alloc"), "initWithSource:injectionTime:forMainFrameOnly:",
-			uintptr(nsString(bridge.TitleBarScript(w.TitleBar(), o.Zoom))), 0, 1)
-		send(w.ucc, "addUserScript:", uintptr(script))
-		release(script)
-	}
+	w.addUserScripts(o.Zoom)
 	send(cfg, "setUserContentController:", uintptr(w.ucc))
 
 	w.web = msgInitRectID(send(class("MyGoWebView"), "alloc"), sel("initWithFrame:configuration:"), NSRect{Size: content.Size}, cfg)
@@ -1076,6 +1060,41 @@ func (w *window) URL() string {
 	var s string
 	withPool(func() { s = goString(send(send(w.web, "URL"), "absoluteString")) })
 	return s
+}
+
+// addUserScripts adds the user scripts of the options to the content
+// controller, and the title bar's after them. Pool required.
+func (w *window) addUserScripts(zoom float64) {
+	add := func(src string, injection uintptr, mainFrameOnly bool) {
+		script := send(send(class("WKUserScript"), "alloc"), "initWithSource:injectionTime:forMainFrameOnly:",
+			uintptr(nsString(src)), injection, boolArg(mainFrameOnly))
+		send(w.ucc, "addUserScript:", uintptr(script))
+		release(script)
+	}
+	for _, s := range w.opts.UserScripts {
+		injection := uintptr(0) // WKUserScriptInjectionTimeAtDocumentStart
+		if s.AtDocumentEnd {
+			injection = 1
+		}
+		add(s.Source, injection, !s.AllFrames)
+	}
+	if w.hiddenTitleBar() {
+		// After the bridge, which it tells: the room of the traffic lights.
+		add(bridge.TitleBarScript(w.TitleBar(), zoom), 0, true)
+	}
+}
+
+// SetUserScripts replaces the user scripts: a content controller can only
+// remove all of its scripts, so they are all added again.
+func (w *window) SetUserScripts(scripts []platform.UserScript) {
+	if w.ucc == 0 || w.closed {
+		return
+	}
+	w.opts.UserScripts = scripts
+	withPool(func() {
+		send(w.ucc, "removeAllUserScripts")
+		w.addUserScripts(w.Zoom())
+	})
 }
 
 func (w *window) Eval(js string) {

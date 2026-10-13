@@ -32,8 +32,13 @@ type window struct {
 	pending      []pendingCall
 	webViewErr   error
 	webViewFails int // creations that failed
-	closed       bool
-	destroying   bool
+	// scriptIDs are the ids of the scripts added to every document, which
+	// SetUserScripts removes; scriptGen counts the replacements, so an id
+	// that arrives after one is removed at once.
+	scriptIDs  []string
+	scriptGen  int
+	closed     bool
+	destroying bool
 
 	minW, minH, maxW, maxH int // DIPs
 	movable, closable      bool

@@ -50,10 +50,10 @@ type Backend struct {
 	// KeepAwake calls not released yet.
 	Watching bool
 	Awake    int
-	// Online and Constrained are what Network.Status answers with, and
+	// Online and Metered are what Network.Status answers with, and
 	// WatchingNetwork whether Network.Watch was called.
-	Online, Constrained bool
-	WatchingNetwork     bool
+	Online, Metered bool
+	WatchingNetwork bool
 	// FileWatches are the file watches made, FileWatchError what making
 	// one fails with, and FileWatchSubtree whether they take Subtree
 	// targets.
@@ -93,7 +93,7 @@ type Backend struct {
 	// NotificationError, when set, is what showing a notification fails
 	// with.
 	NotificationError error
-	// NoWebView makes WebViewSupported report no system webview, as a
+	// NoWebView makes WebViewAvailable report no system webview, as a
 	// machine without one does.
 	NoWebView bool
 	// notifications are the notifications shown and not yet removed, by
@@ -324,9 +324,9 @@ func (b *Backend) PressHotkey(acc string) {
 // what the app asked for and report a click as a platform does.
 func (b *Backend) NotificationsSupported() bool { return true }
 
-// WebViewSupported reports whether the fake system webview is there:
+// WebViewAvailable reports whether the fake system webview is there:
 // windows showing web pages work, unless NoWebView says otherwise.
-func (b *Backend) WebViewSupported() bool { return !b.NoWebView }
+func (b *Backend) WebViewAvailable() bool { return !b.NoWebView }
 
 func (b *Backend) ShowNotification(n *platform.Notification, done func(error)) {
 	b.mu.Lock()
@@ -412,6 +412,8 @@ type Window struct {
 	PDF platform.PDFOptions
 	// HTML holds the documents LoadHTML loaded, in order.
 	HTML []string
+	// UserScriptUpdates counts the calls of SetUserScripts.
+	UserScriptUpdates int
 	// What the window extras were last set to.
 	Background      platform.Color
 	Progress        string
@@ -616,6 +618,14 @@ func (w *Window) Eval(js string) {
 	w.mu.Lock()
 	w.scripts = append(w.scripts, js)
 	w.mu.Unlock()
+}
+
+// SetUserScripts replaces Opts.UserScripts, which tests read.
+func (w *Window) SetUserScripts(scripts []platform.UserScript) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.Opts.UserScripts = scripts
+	w.UserScriptUpdates++
 }
 
 func (w *Window) CallAsyncFunction(body string, cb func(string, error)) {
@@ -888,7 +898,7 @@ type network struct{ b *Backend }
 func (n network) Status() platform.NetworkStatus {
 	n.b.mu.Lock()
 	defer n.b.mu.Unlock()
-	return platform.NetworkStatus{Online: n.b.Online, Constrained: n.b.Constrained}
+	return platform.NetworkStatus{Online: n.b.Online, Metered: n.b.Metered}
 }
 
 func (n network) Watch() {

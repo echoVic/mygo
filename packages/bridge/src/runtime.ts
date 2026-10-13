@@ -1,4 +1,4 @@
-import type { BridgeConfig, Channel, Incoming, Outgoing, Runtime } from "./types";
+import type { BridgeConfig, Channel, Incoming, Outgoing, Runtime, ThemePreferences } from "./types";
 
 type Pending = {
   method: string;
@@ -55,6 +55,15 @@ export function createRuntime(
   const token = Math.random().toString(36).slice(2) + Date.now().toString(36);
   const pending = new Map<number, Pending>();
   const listeners = new Map<string, Set<Listener>>();
+  // The desktop's preferences, which Go tells at document start and on
+  // every change; the defaults stand until then.
+  let preferences: ThemePreferences = {
+    accent: null,
+    reduceMotion: false,
+    reduceTransparency: false,
+    highContrast: false,
+    textScale: 1,
+  };
   let seq = 0;
   // Channels passed to calls, by id, and the state of every channel.
   const channels = new Map<number, ChannelState>();
@@ -227,6 +236,8 @@ export function createRuntime(
     receive(messages) {
       for (const msg of Array.isArray(messages) ? messages : [messages]) {
         if (msg.t === "event") {
+          // Before the listeners, which may read it.
+          if (msg.n === "mygo:preferences") preferences = Object.freeze(msg.p as ThemePreferences);
           const set = listeners.get(msg.n);
           if (!set) continue;
           for (const listener of [...set]) {
@@ -267,6 +278,9 @@ export function createRuntime(
     platform: config.platform,
     windowId: config.windowId,
     version: config.version,
+    get preferences() {
+      return preferences;
+    },
     window: Object.freeze({
       minimize: win("Minimize"),
       maximize: win("Maximize"),

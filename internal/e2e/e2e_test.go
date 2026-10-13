@@ -245,7 +245,6 @@ var beforeRunCalls = []struct {
 	{"Theme.Preferences", func() { mygo.Theme.Preferences() }},
 	{"Dialog.Message", func() { mygo.Dialog.Message(mygo.MessageOptions{Message: "Too early"}) }},
 	{"NewTray", func() { mygo.NewTray(mygo.TrayOptions{}) }},
-	{"WebViewSupported", func() { mygo.WebViewSupported() }},
 }
 
 // beforeRun is a helper process for TestBeforeRun: it does what main may
@@ -259,6 +258,8 @@ func beforeRun(source mygo.ThemeSource) {
 		{Label: "New Window", Click: func(*mygo.MenuItem, *mygo.Window) { clicked <- struct{}{} }},
 	}))
 	fmt.Println("locale:", mygo.App.Locale() != "")
+	// Asked before the first window, which may then show native UI.
+	fmt.Println("webview:", mygo.WebViewAvailable())
 	mygo.Power.IsOnBattery()
 	for _, c := range beforeRunCalls {
 		func() {
@@ -304,7 +305,7 @@ func TestBeforeRun(t *testing.T) {
 			t.Errorf("%s: %v:\n%s", source, err, out)
 			continue
 		}
-		wants := []string{"locale: true\n", fmt.Sprintf("dark: %v\n", source == mygo.ThemeDark)}
+		wants := []string{"locale: true\n", "webview: true\n", fmt.Sprintf("dark: %v\n", source == mygo.ThemeDark)}
 		for _, c := range beforeRunCalls {
 			wants = append(wants, c.name+": mygo: "+c.name+" called before ")
 		}
@@ -627,10 +628,9 @@ func TestEvalForms(t *testing.T) {
 
 // TestThemePreferencesReachThePage checks the whole path from the desktop
 // to a real page: the accent color and the settings of accessibility as
-// the CSS variables of :root, which the page reads. Which accent a CI
-// desktop has is unknown, so the page is compared with Go, not fixed.
-// A live change of the desktop's settings is not testable here: only the
-// desktop can make one, and the way it tells the app is per platform.
+// mygo-runtime's preferences and the CSS variables of :root, which the
+// page reads. Which accent a CI desktop has is unknown, so the page is
+// compared with Go, not fixed.
 func TestThemePreferencesReachThePage(t *testing.T) {
 	w := newWindow(t, mygo.WindowOptions{Hidden: true})
 	w.Page().LoadHTML("<p>preferences</p>", "")
@@ -643,15 +643,24 @@ func TestThemePreferencesReachThePage(t *testing.T) {
 		return v
 	}
 	waitFor(t, w, `getComputedStyle(document.documentElement).getPropertyValue("--mygo-text-scale").trim()`)
-	if got, want := read("--mygo-text-scale"), fmt.Sprint(mygo.Theme.TextScale()); got != want {
+	p := mygo.Theme.Preferences()
+	if got, want := read("--mygo-text-scale"), fmt.Sprint(p.TextScale); got != want {
 		t.Errorf("--mygo-text-scale = %q, want %q", got, want)
 	}
-	want := ""
-	if c := mygo.Theme.AccentColor(); c.A != 0 {
-		want = c.String()
+	want, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := read("--mygo-accent"); got != want {
-		t.Errorf("--mygo-accent = %q, want %q", got, want)
+	got, err := mygo.EvalAs[string](w.Page(), `JSON.stringify(window.mygo.preferences)`)
+	if err != nil || got != string(want) {
+		t.Errorf("mygo.preferences = %s, %v, want %s", got, err, want)
+	}
+	accent := ""
+	if a := p.Accent; a.A != 0 {
+		accent = fmt.Sprintf("#%02x%02x%02x", a.R, a.G, a.B)
+	}
+	if got := read("--mygo-accent"); got != accent {
+		t.Errorf("--mygo-accent = %q, want %q", got, accent)
 	}
 }
 
