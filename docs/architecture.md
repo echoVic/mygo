@@ -928,12 +928,14 @@ build` like mygo-runtime and released with the same version.
   Connections belong to their page and close on navigation or app quit.
   `mygo-plugin.json` names the six native-library assets, which the CLI
   bundles like libghostty-vt, with checksums for the library assets. Go and native UI apps can also open connections directly.
-- **watch** gives pages `mygo.WatchFiles` watches of the directories the
-  app names, by their names. `Watch` streams the events through a channel
-  for as long as the watch lasts. A page's watches count against its quota
-  by the `Done` channel of its page context, which ipc.go gives plugins in
-  the call's context (`internal/callcontext`), as navigating starts a new
-  one; they stop with the page context.
+- **watch** gives pages `mygo.WatchFiles` watches of the directories and
+  files the app names, by their names (`Roots`, or `Resolve` for those
+  granted while it runs). `Watch` streams a part per batch through a
+  channel for as long as the watch lasts, and returns how it ended, a code
+  the page turns into a `WatchError`. A page's watches count against its
+  quota by `mygo.CallerPage` while their call's context is not done, as
+  navigating ends the page context before the watches have stopped; they
+  stop with it.
 
 - **terminal** is a terminal for native UI: a `Terminal` runs a program in
   a pseudo-terminal and emulates it with libghostty-vt, Ghostty's terminal
@@ -1471,6 +1473,21 @@ and compares its identity with what the scan saw, then the scan stats it
 again, so that an entry replaced in between (an editor's atomic save) is
 looked at again rather than watched in place of the other.
 
+A watched file is watched through its directory, enrolled as `..` with
+the file as `.`: the scan's `os.Root` is the directory, and notices of the
+directory naming other entries are dropped. A file replaced at its path is
+reported as written. `Ignore` is asked before an entry is stat'ed, from
+the directory listing's type, so an ignored directory is never opened;
+the directories it ignored are kept per listed directory, so that the
+notices of a `Subtree` target about what is in them are dropped.
+
+`Next` returns a batch, the events of one update. An update doesn't run
+while a batch waits for `Next` (`taken` tells the goroutine when one was
+taken): notices still mark what to look at, a set that falls back to
+looking at everything past `MaxEntries`, so a slow reader loses nothing
+and holds one batch. A directory gone ends the watch with a `FileRemove`
+of `.` and `io.EOF`, as `Close` and the watch's context do.
+
 The watch's goroutine is the only user of its scan and of its backend's
 watcher, whose methods `internal/watchdriver` runs on a goroutine of its
 own: it adds and removes targets between waits for the system, which
@@ -1497,6 +1514,16 @@ main thread, so watches work before the app runs and don't wait on it.
   The handles can't be given to the os package, which would tie them to the
   Go runtime's completion port. A handle closed still completes its I/O,
   which writes to its buffer, so a session lives until its completion.
+  A drive's root has no parent to watch, and can't be renamed. The
+  directories that `Lstat` takes for directories are watched, which leaves
+  out junctions and mount points but not the placeholders of cloud files
+  (OneDrive), reparse points that are no name surrogates.
+
+Backends report a write (`FileWatchWrite`) only for content: kqueue's
+`NOTE_WRITE` and `NOTE_EXTEND`, inotify's `IN_MODIFY` and `IN_CLOSE_WRITE`,
+and Windows without `FILE_NOTIFY_CHANGE_ATTRIBUTES`. Attribute changes are
+dirty, and the core compares only size and modification time, so that
+indexers and antivirus touching metadata report nothing.
 
 ## Documents (`document*.go`)
 
@@ -1535,10 +1562,12 @@ files (`Backend.ReplaceFile`).
   takes the sessions whose lock it gets, reopens their documents edited
   (in conflict when the file's stamp changed), writes them into its own
   session, then removes the old ones.
-- *Watches.* One `WatchFiles` per folder of open documents, shared by
-  reference count; an event naming a document's file makes it look at the
-  disk (`checkDisk`), as focusing its window does. A rename within the
-  folder is followed.
+- *Watches.* One `WatchFiles` per file of open documents, shared by
+  reference count, which costs the same whatever else its folder holds
+  (kqueue takes a descriptor per file a folder's watch covers); a batch
+  makes the document look at the disk (`checkDisk`), as focusing its
+  window does, and so does the watch once it started. A removal looks in
+  the folder for the file's identity, to follow a rename.
 - *Closing and quitting* never nest an event loop: `OnClose` of a
   document's window prevents a close that must save or ask, does it on a
   goroutine (dialogs are sheets on macOS), then destroys the window. The

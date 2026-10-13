@@ -238,9 +238,11 @@ func (d *inotifyWatch) Wait() ([]platform.FileWatchNotice, error) {
 					notice.Kind = platform.FileWatchCreate
 				case r.mask&(syscall.IN_DELETE|syscall.IN_DELETE_SELF) != 0:
 					notice.Kind = platform.FileWatchRemove
-				case r.mask&(syscall.IN_MODIFY|syscall.IN_CLOSE_WRITE|syscall.IN_ATTRIB) != 0:
+				case r.mask&(syscall.IN_MODIFY|syscall.IN_CLOSE_WRITE) != 0:
 					notice.Kind = platform.FileWatchWrite
 				}
+				// IN_ATTRIB is dirty: the core looks, and metadata alone is
+				// not a write.
 				// A deleted directory's automatic IN_IGNORED is expected;
 				// retain its removal hint instead of turning it into stream loss.
 				if r.mask&syscall.IN_DELETE_SELF != 0 {
