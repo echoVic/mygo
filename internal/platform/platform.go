@@ -188,10 +188,13 @@ type AppController interface {
 	// main thread.
 	ClearBrowsingData(done func(error))
 	// Cookie operations address the default page store. Calls and exactly-once
-	// completions run on main; ListCookies returns independent Go values.
-	ListCookies(done func([]Cookie, error))
+	// completions run on main; ListCookies returns independent Go values:
+	// every cookie, or with an http or https url the cookies a request to
+	// it sends (CookieMatchesURL where the engine cannot tell).
+	ListCookies(url string, done func([]Cookie, error))
 	SetCookie(cookie Cookie, done func(error))
 	DeleteCookie(key CookieKey, done func(error))
+	ClearCookies(done func(error))
 	ShowAboutPanel(opts AboutPanelOptions)
 	Locale() string
 	// RegisterURLScheme makes the app, identified by id (its identifier)
@@ -214,9 +217,9 @@ type AppController interface {
 	// removes the ones the app recorded.
 	AddRecentDocument(path string) error
 	ClearRecentDocuments() error
-	// SetJumpListTasks sets the Tasks category of the app's jump list
-	// (Windows); elsewhere it does nothing.
-	SetJumpListTasks(tasks []JumpListTask) error
+	// SetJumpList commits the app's whole jump list (Windows); elsewhere
+	// it does nothing.
+	SetJumpList(list JumpList) error
 }
 
 // PackageInfo is metadata of a packaged application.
@@ -235,14 +238,22 @@ type AboutPanelOptions struct {
 	Credits            string
 }
 
-// JumpListTask is a task of a jump list: a program to run, its label and
-// its icon.
+// JumpList is the whole jump list of the app: Windows replaces all of it
+// at each commit.
+type JumpList struct {
+	Tasks []JumpListTask
+}
+
+// JumpListTask is a task of a jump list: a program to run with its
+// arguments, unquoted, its label, tooltip and icon.
 type JumpListTask struct {
-	Title     string
-	Path      string
-	Args      string
-	IconPath  string
-	IconIndex int
+	Title       string
+	Description string
+	Path        string
+	Args        []string
+	WorkingDir  string
+	IconPath    string
+	IconIndex   int
 }
 
 // WindowOptions configures a native window and its webview. The public

@@ -36,6 +36,9 @@ type Backend struct {
 	envStarted bool
 	envWaiters []func()
 
+	// cookies gives cookie calls a cookie manager (cookies.go).
+	cookies cookieStore
+
 	menus menuTable
 
 	trays          map[uint32]*tray

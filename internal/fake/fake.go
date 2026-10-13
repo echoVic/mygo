@@ -70,13 +70,17 @@ type Backend struct {
 	Cleared int
 	// cookies holds the cookies of the pages, by name, domain and path.
 	cookies map[platform.CookieKey]platform.Cookie
+	// CookiesCleared counts ClearCookies calls.
+	CookiesCleared int
 	// RecentDocuments are the paths AddRecentDocument recorded, in order,
 	// without the ones ClearRecentDocuments removed.
 	RecentDocuments []string
 	// RecentCleared counts ClearRecentDocuments calls.
 	RecentCleared int
-	// JumpListTasks are the tasks of the last SetJumpListTasks call.
-	JumpListTasks []platform.JumpListTask
+	// JumpList is the list of the last SetJumpList call, JumpListCommits
+	// the number of calls.
+	JumpList        platform.JumpList
+	JumpListCommits int
 	// Dialog results returned by the next dialog.
 	OpenResult    []string
 	SaveResult    string
@@ -733,10 +737,11 @@ func (a app) ClearRecentDocuments() error {
 	return nil
 }
 
-func (a app) SetJumpListTasks(tasks []platform.JumpListTask) error {
+func (a app) SetJumpList(list platform.JumpList) error {
 	a.b.mu.Lock()
 	defer a.b.mu.Unlock()
-	a.b.JumpListTasks = append([]platform.JumpListTask(nil), tasks...)
+	a.b.JumpList = list
+	a.b.JumpListCommits++
 	return nil
 }
 

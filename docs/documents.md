@@ -261,9 +261,11 @@ Apps with documents get a menu bar on Linux and Windows too, with File and
 Edit menus, until they set their own.
 
 Open Recent lists the documents the app opened and saved lately, newest
-first, which `App.RecentDocuments` returns; the app also records them with
-the system (`App.AddRecentDocument`): the Dock menu on macOS, the jump list
-on Windows, the recently used files on Linux.
+first, which `App.RecentDocuments` returns: documents record their files
+with `App.AddRecentDocument`, which also records them with the system (the
+Dock menu on macOS, the jump list on Windows, the recently used files on
+Linux), and its Clear Menu calls `App.ClearRecentDocuments`. See
+[recent documents](app.md#recent-documents).
 
 ## Opening files
 
