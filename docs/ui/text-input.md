@@ -52,20 +52,32 @@ ui.TextArea(c, &app.notes).Height(160)
   })
   ```
 
-- `OnEnter(fn)` sees an Enter before the input takes it. Returning true
-  takes the Enter: a text area inserts no newline, and a `TextInput` does
-  not submit. fn may run between frames, so it reads the text and replaces
-  it through its `ui.Enter` rather than an `Element` kept from the view, as
-  a chat composer sends with Enter and breaks the line with Shift+Enter:
+- `OnTextKey(fn)` sees a key that types no text before the input takes
+  it: Enter, Tab, Escape, Backspace and Delete, the arrows and the other
+  keys that move the caret, and chords with Cmd or Ctrl, as AppKit's
+  `doCommandBySelector` and a web page's `keydown` do. fn runs as the key
+  comes, after the keys and text typed before it, and returning true takes
+  the key: a text area inserts no newline, a `TextInput` does not submit,
+  Tab does not move the focus. A key left goes on as without fn. Keys that
+  a `Shortcut` around the focus handles go to it first, as with
+  `HandleInput`, unless the input edits with them, as with Enter and the
+  arrows. fn may run between frames, so it reads the text and replaces it
+  through its `ui.TextKey` rather than an `Element` kept from the view
+  (they panic once fn returns), as a chat composer sends with Enter, breaks
+  the line with Shift+Enter, and puts the last message back with Up:
 
   ```go
-  ui.TextArea(c, &app.draft).Lines(1, 8).OnEnter(func(e ui.Enter) bool {
-  	if e.Mods&ui.Shift != 0 {
-  		return false // Shift+Enter breaks the line
+  ui.TextArea(c, &app.draft).Lines(1, 8).OnTextKey(func(k ui.TextKey) bool {
+  	switch {
+  	case k.Key == ui.KeyEnter && k.Mods == 0:
+  		app.send(k.Text())
+  		k.SetText("")
+  		return true
+  	case k.Key == ui.KeyUp && k.Mods == 0 && k.Text() == "":
+  		k.SetText(app.lastSent())
+  		return true
   	}
-  	app.send(e.Text())
-  	e.SetText("")
-  	return true
+  	return false // Shift+Enter breaks the line
   })
   ```
 

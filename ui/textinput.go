@@ -55,7 +55,7 @@ func textInputBase(c *context, value *string, multiline bool) *node {
 		ed.setText(*value)
 		ed.compose = ""
 	}
-	ed.readOnly, ed.password, ed.lines, ed.onPaste, ed.onEnter = false, false, [2]int{}, nil, nil
+	ed.readOnly, ed.password, ed.lines, ed.onPaste, ed.onTextKey = false, false, [2]int{}, nil, nil
 	ed.ranges = ed.ranges[:0]
 	e.onValueInput(stringInput)
 
@@ -99,59 +99,73 @@ func (e *node) OnPaste(fn func(text string) bool) *node {
 	return e
 }
 
-// OnEnter has fn see an Enter in the text input before the editor takes
-// it, on the main thread as the key comes. fn reports whether it took the
-// Enter; one taken changes nothing: a text area inserts no newline, and a
-// single-line input does not submit. Like ReadOnly, it holds for the input
-// that comes until the next frame.
+// OnTextKey has fn see a key pressed in the text input before the input
+// takes it, on the main thread as the key comes, with the text typed
+// before it in place, as AppKit's doCommandBySelector and a web page's
+// keydown on a text field: Enter that sends a message, Up that edits the
+// last one, Tab that accepts a completion, Escape that cancels, Cmd+Enter.
+// fn reports whether it took the key; one taken changes nothing but what
+// fn sets: a text area inserts no newline, a single-line input does not
+// submit, Tab does not move the focus. One left goes on as it would
+// without fn.
 //
-// fn may run between frames, where an Element kept from the view is no
-// longer valid: it reads and replaces the text through e instead, as a
-// chat composer sends with Enter, clears what it sent, and breaks the line
-// with Shift+Enter:
+// fn sees the keys that type no text: those with Cmd or Ctrl, and Enter,
+// Tab, Escape, Backspace, Delete, the arrows and the other keys that move
+// the caret, as pressed (macOS's Control keys that move the caret too).
+// While an input method composes, its keys are its own. Keys that the
+// window or an element around the focus handles as a Shortcut go to the
+// shortcut first, as with HandleInput, unless the input edits with them,
+// as with Enter and the arrows. Like ReadOnly, OnTextKey holds for the
+// input that comes until the next frame.
 //
-//	ui.TextArea(c, &app.draft).OnEnter(func(e ui.Enter) bool {
-//		if e.Mods&ui.Shift != 0 {
-//			return false
+// fn runs between frames, where an Element kept from the view is no longer
+// valid: it reads and replaces the text through k instead, as a chat
+// composer sends with Enter, clears what it sent, and breaks the line with
+// Shift+Enter:
+//
+//	ui.TextArea(c, &app.draft).OnTextKey(func(k ui.TextKey) bool {
+//		if k.Key != ui.KeyEnter || k.Mods != 0 {
+//			return false // Shift+Enter breaks the line
 //		}
-//		app.send(e.Text())
-//		e.SetText("")
+//		app.send(k.Text())
+//		k.SetText("")
 //		return true
 //	})
-func (e *node) OnEnter(fn func(e Enter) bool) *node {
+func (e *node) OnTextKey(fn func(k TextKey) bool) *node {
 	if ed := e.st.editor; ed != nil && e.flags&flagEditable != 0 {
-		ed.onEnter = fn
+		ed.onTextKey = fn
 	}
 	return e
 }
 
-// Enter is an Enter pressed in a text input, as OnEnter's fn sees it. It
-// is valid while fn runs.
-type Enter struct {
-	// Mods are the modifiers held with the Enter.
+// A TextKey is a key pressed in a text input, as OnTextKey's fn sees it.
+// It is valid while fn runs: Text and SetText panic after fn returns.
+type TextKey struct {
+	Key  Key
 	Mods Modifiers
 	ed   *editor
+	seq  uint64
 }
 
-// Text returns the text of the input as the Enter comes, which may be
-// ahead of the bound value: that takes what is typed as the next frame is
-// built.
-func (e Enter) Text() string {
-	if e.ed == nil || !e.ed.entering {
-		return ""
+// valid panics unless k's fn is running.
+func (k TextKey) valid() *editor {
+	if k.ed == nil || !k.ed.keying || k.ed.keySeq != k.seq {
+		panic("ui: a TextKey is valid only while its OnTextKey fn runs")
 	}
-	return e.ed.String()
+	return k.ed
 }
+
+// Text returns the text of the input as the key comes, with what was typed
+// before it, which may be ahead of the bound value: that takes what is
+// typed as the next frame is built.
+func (k TextKey) Text() string { return k.valid().String() }
 
 // SetText replaces the text of the input, and its bound value, as the app
 // does by setting the value as the view is built: a composer clears the
-// draft it sent. Writing the bound value from fn is not enough, as the
-// editor writes what it holds over it.
-func (e Enter) SetText(s string) {
-	ed := e.ed
-	if ed == nil || !ed.entering {
-		return
-	}
+// draft it sent, Up puts the last message back. Writing the bound value
+// from fn is not enough, as the editor writes what it holds over it.
+func (k TextKey) SetText(s string) {
+	ed := k.valid()
 	if ed.document != nil {
 		// A TextBuffer takes the text as when the app sets it.
 		ed.document.Set(s)
@@ -165,7 +179,7 @@ func (e Enter) SetText(s string) {
 		}
 	}
 	if w := ed.client; w != nil {
-		// What the view built before the Enter shows the old text.
+		// What the view built before the key shows the old text.
 		w.rt.consumed = true
 		w.rt.requestFrame()
 	}

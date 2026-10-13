@@ -579,6 +579,14 @@ func (rt *engine) keyDownPhysical(mods Modifiers, key, physical Key, repeat bool
 		rt.blinkStart = time.Now()
 		return true
 	}
+	if s := rt.states[rt.focused]; s != nil && s.editor != nil && s.editor.onTextKey != nil && s.flags&flagEditable != 0 &&
+		!typesText(k) && (s.editor.wants(k) || !rt.claimed(k)) && s.editor.textKey(k) {
+		// OnTextKey took it as it came, as HandleInput does, but after the
+		// keys and text before it, which it reads.
+		rt.blinkStart = time.Now()
+		rt.requestFrame()
+		return true
+	}
 	if (key == KeyContextMenu && mods == 0 || key == KeyF10 && mods == Shift) && !rt.claimed(k) && rt.menuKey() {
 		return false
 	}

@@ -55,10 +55,12 @@ type editor struct {
 	password           bool
 	// onPaste sees a paste before it is inserted (OnPaste).
 	onPaste func(text string) bool
-	// onEnter sees an Enter before the editor takes it (OnEnter).
-	onEnter func(e Enter) bool
-	// entering is set while onEnter runs, as its Enter is valid.
-	entering bool
+	// onTextKey sees a key before the editor takes it (OnTextKey).
+	onTextKey func(k TextKey) bool
+	// keying is set while onTextKey runs, as the TextKey numbered keySeq
+	// is valid.
+	keying bool
+	keySeq uint64
 	// leaveEmptyBackspace leaves Backspace to shortcuts while the text is
 	// empty, as a token field's input does to take out a token.
 	leaveEmptyBackspace bool

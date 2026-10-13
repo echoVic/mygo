@@ -4008,35 +4008,6 @@ func (_handle Element) NoWrap() Element {
 	return wrapElement(_node.NoWrap())
 }
 
-// OnEnter has fn see an Enter in the text input before the editor takes
-// it, on the main thread as the key comes. fn reports whether it took the
-// Enter; one taken changes nothing: a text area inserts no newline, and a
-// single-line input does not submit. Like ReadOnly, it holds for the input
-// that comes until the next frame.
-//
-// fn may run between frames, where an Element kept from the view is no
-// longer valid: it reads and replaces the text through e instead, as a
-// chat composer sends with Enter, clears what it sent, and breaks the line
-// with Shift+Enter:
-//
-//	ui.TextArea(c, &app.draft).OnEnter(func(e ui.Enter) bool {
-//		if e.Mods&ui.Shift != 0 {
-//			return false
-//		}
-//		app.send(e.Text())
-//		e.SetText("")
-//		return true
-//	})
-func (_handle Element) OnEnter(fn func(e Enter) bool) Element {
-	_node := _handle.node()
-	if _node == nil {
-		return Element{}
-	}
-	_ctx := _node.c
-	_ = _ctx
-	return wrapElement(_node.OnEnter(fn))
-}
-
 // OnPaste has fn see a paste into a text input, by Cmd+V, Ctrl+V or a
 // Paste menu item, before it is inserted, on the main thread as the paste
 // comes: text is the clipboard's text, empty when it holds none, as with
@@ -4053,6 +4024,48 @@ func (_handle Element) OnPaste(fn func(text string) bool) Element {
 	_ctx := _node.c
 	_ = _ctx
 	return wrapElement(_node.OnPaste(fn))
+}
+
+// OnTextKey has fn see a key pressed in the text input before the input
+// takes it, on the main thread as the key comes, with the text typed
+// before it in place, as AppKit's doCommandBySelector and a web page's
+// keydown on a text field: Enter that sends a message, Up that edits the
+// last one, Tab that accepts a completion, Escape that cancels, Cmd+Enter.
+// fn reports whether it took the key; one taken changes nothing but what
+// fn sets: a text area inserts no newline, a single-line input does not
+// submit, Tab does not move the focus. One left goes on as it would
+// without fn.
+//
+// fn sees the keys that type no text: those with Cmd or Ctrl, and Enter,
+// Tab, Escape, Backspace, Delete, the arrows and the other keys that move
+// the caret, as pressed (macOS's Control keys that move the caret too).
+// While an input method composes, its keys are its own. Keys that the
+// window or an element around the focus handles as a Shortcut go to the
+// shortcut first, as with HandleInput, unless the input edits with them,
+// as with Enter and the arrows. Like ReadOnly, OnTextKey holds for the
+// input that comes until the next frame.
+//
+// fn runs between frames, where an Element kept from the view is no longer
+// valid: it reads and replaces the text through k instead, as a chat
+// composer sends with Enter, clears what it sent, and breaks the line with
+// Shift+Enter:
+//
+//	ui.TextArea(c, &app.draft).OnTextKey(func(k ui.TextKey) bool {
+//		if k.Key != ui.KeyEnter || k.Mods != 0 {
+//			return false // Shift+Enter breaks the line
+//		}
+//		app.send(k.Text())
+//		k.SetText("")
+//		return true
+//	})
+func (_handle Element) OnTextKey(fn func(k TextKey) bool) Element {
+	_node := _handle.node()
+	if _node == nil {
+		return Element{}
+	}
+	_ctx := _node.c
+	_ = _ctx
+	return wrapElement(_node.OnTextKey(fn))
 }
 
 // Opacity makes the element and its children translucent.
