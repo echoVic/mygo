@@ -28,13 +28,12 @@ type host interface {
 	setTextInput(t platform.TextInputState)
 	updateAccessibility(tree *platform.AccessTree)
 	readClipboard() string
-	// readClipboardImage reads the clipboard's image as PNG, nil without
-	// one.
-	readClipboardImage() []byte
 	writeClipboard(string)
 	// readClipboardData reads the representations of formats on the
-	// clipboard, all for nil; writeClipboardData puts data there.
+	// clipboard, all for nil; writeClipboardData puts data there;
+	// clipboardFormats lists them.
 	readClipboardData(formats []transfer.Format) transfer.Data
+	clipboardFormats() []transfer.Format
 	writeClipboardData(transfer.Data)
 	startDrag()
 	startDataDrag(transfer.Data, any, transfer.DragOptions, float32, float32) error

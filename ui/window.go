@@ -468,11 +468,11 @@ func (h *windowHost) readClipboard() string {
 	return h.conn.Clipboard.ReadText()
 }
 
-func (h *windowHost) readClipboardImage() []byte {
+func (h *windowHost) clipboardFormats() []transfer.Format {
 	if h.conn.Clipboard == nil {
 		return nil
 	}
-	return h.conn.Clipboard.ReadImage()
+	return h.conn.Clipboard.Formats()
 }
 
 func (h *windowHost) writeClipboard(s string) {
