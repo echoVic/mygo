@@ -155,9 +155,8 @@ replace what is in a directory.
 - macOS watches with kqueue, which takes a file descriptor for every file
   and directory watched; a file watched takes two, its own and its
   directory's.
-- Linux watches each directory with inotify, whose limits are those of the
-  system (`fs.inotify.max_user_watches`, and `max_user_instances`, as each
-  watch takes an instance).
+- Linux watches each directory with inotify, through one instance for the
+  app, whose limit is the system's (`fs.inotify.max_user_watches`).
 - Windows watches a recursive directory with one `ReadDirectoryChangesW`,
   so the directories in it can be renamed, and also watches its parent to
   know when it is renamed. While a directory is watched, Windows doesn't let

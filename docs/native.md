@@ -405,7 +405,9 @@ directories written, whose changes are their entries'.
 
 A watch doesn't look again until `Next` has taken the last batch: when the
 app is busy, what changed meanwhile comes in the next batch, so nothing is
-lost and nothing piles up. `Ignore` leaves out files and directories by
+lost and nothing piles up. What the watch can't look at, such as a
+directory without permission, is left out rather than ending it.
+`Ignore` leaves out files and directories by
 their path: a directory it ignores is never opened, and doesn't count in
 `MaxEntries`.
 

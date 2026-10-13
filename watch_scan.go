@@ -410,6 +410,9 @@ func (s *fileWatchScan) statFile() error {
 		}
 		return nil
 	}
+	if s.inaccessible(".", err) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -448,11 +451,22 @@ func (s *fileWatchScan) stat(p string) error {
 		s.set(p, info)
 		return s.enroll(p, info)
 	}
+	if s.inaccessible(p, err) {
+		return nil
+	}
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
 	s.lists[path.Dir(p)] = true
 	return nil
+}
+
+// inaccessible reports whether err says p can't be looked at, as a
+// directory without permission or, on Windows, a file the system holds
+// (pagefile.sys): it is left as it was seen, if at all, rather than
+// ending the watch. The watched directory itself can't be.
+func (s *fileWatchScan) inaccessible(p string, err error) bool {
+	return err != nil && (p != "." || s.file) && fileWatchInaccessible(err)
 }
 
 // ignoredIn returns the directories ignored in directory p.
@@ -481,6 +495,9 @@ func (s *fileWatchScan) list(p string) error {
 			// Gone or replaced: what has it knows.
 			return s.list(path.Dir(p))
 		}
+		if s.inaccessible(p, err) {
+			return nil
+		}
 		return err
 	}
 	defer dir.Close()
@@ -506,6 +523,9 @@ func (s *fileWatchScan) list(p string) error {
 				delete(seen, name)
 				continue
 			}
+			if s.inaccessible(child, err) {
+				continue // as it was, if it was known
+			}
 			if err != nil {
 				return err
 			}
@@ -525,6 +545,9 @@ func (s *fileWatchScan) list(p string) error {
 		}
 		if err == io.EOF {
 			break
+		}
+		if s.inaccessible(p, err) {
+			return nil // what is gone is not known
 		}
 		if err != nil {
 			return err
@@ -605,9 +628,13 @@ func (s *fileWatchScan) visit(p string, info os.FileInfo) error {
 		if !s.descends(p, info) {
 			break
 		}
-		dir, info, err = s.openDir(p, info)
+		opened, openedInfo, err := s.openDir(p, info)
 		if err == nil {
+			dir, info = opened, openedInfo
 			break
+		}
+		if s.inaccessible(p, err) {
+			break // known, but not what is in it
 		}
 		if p == "." {
 			return err
@@ -643,6 +670,9 @@ func (s *fileWatchScan) visit(p string, info os.FileInfo) error {
 				s.races[p] = true
 				continue
 			}
+			if s.inaccessible(child, err) {
+				continue
+			}
 			if err != nil {
 				return err
 			}
@@ -650,8 +680,8 @@ func (s *fileWatchScan) visit(p string, info os.FileInfo) error {
 				return err
 			}
 		}
-		if err == io.EOF {
-			return nil
+		if err == io.EOF || s.inaccessible(p, err) {
+			return nil // what it could list
 		}
 		if err != nil {
 			return err
@@ -707,7 +737,10 @@ func (s *fileWatchScan) enroll(p string, info os.FileInfo) error {
 		s.unenroll(p)
 		return nil
 	}
-	return s.add(p, info)
+	if err := s.add(p, info); !s.inaccessible(p, err) {
+		return err
+	}
+	return nil // seen, but not watched
 }
 
 func (s *fileWatchScan) add(p string, info os.FileInfo) error {

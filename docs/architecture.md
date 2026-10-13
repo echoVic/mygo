@@ -1481,6 +1481,11 @@ the directory listing's type, so an ignored directory is never opened;
 the directories it ignored are kept per listed directory, so that the
 notices of a `Subtree` target about what is in them are dropped.
 
+An entry the scan can't look at, a directory without permission or a
+file Windows holds (`pagefile.sys`, a sharing violation), is left as it
+was seen, if at all, and what is in it unwatched, rather than ending the
+watch; only the watched directory itself must be readable.
+
 `Next` returns a batch, the events of one update. An update doesn't run
 while a batch waits for `Next` (`taken` tells the goroutine when one was
 taken): notices still mark what to look at, a set that falls back to
@@ -1499,11 +1504,16 @@ main thread, so watches work before the app runs and don't wait on it.
 - macOS: kqueue `EVFILT_VNODE` on a descriptor opened `O_EVTONLY` for every
   file and directory, since a directory tells that its entries changed but
   not which, and a file's writes only reach its own descriptor.
-- Linux: an inotify instance per watch with a watch per directory, which
-  names the child that changed. The same directory added twice shares a
-  watch descriptor, and a removed descriptor's events still queued before
-  its `IN_IGNORED` must not be taken for a new one's, so the backend keeps
-  generations of targets per descriptor.
+- Linux: one inotify instance for the process, as fsnotify, with a watch
+  per directory, which names the child that changed: watches cost watch
+  descriptors, not instances, of which many systems allow 128 per user
+  for all apps. A goroutine reads it through the runtime's poller and
+  queues each watch's notices, which its driver's `Wait` returns. The
+  same directory added twice, by one watch or several, shares a watch
+  descriptor, and a removed descriptor's events still queued before its
+  `IN_IGNORED` must not be taken for a new one's, so the backend keeps
+  generations of targets, each its watch and ID, per descriptor; the
+  last target of a descriptor removes it.
 - Windows: `ReadDirectoryChangesW` on overlapped handles, completing on a
   completion port per watch. Windows refuses to rename a directory while a
   handle is open on something beneath it, so a recursive watch is one

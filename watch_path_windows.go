@@ -1,8 +1,11 @@
 package mygo
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"syscall"
 )
 
 // OpenRoot uses an ordinary Windows handle that prevents deletion and rename.
@@ -19,4 +22,13 @@ func fileWatchOpenRoot(path string) (*os.Root, error) {
 	}
 	defer parent.Close()
 	return parent.OpenRoot(filepath.Base(path))
+}
+
+// fileWatchInaccessible reports whether err says a file can't be looked
+// at: without permission, or held by the system with a sharing mode that
+// leaves out even reading its attributes, as pagefile.sys and
+// hiberfil.sys.
+func fileWatchInaccessible(err error) bool {
+	const errorSharingViolation, errorLockViolation = syscall.Errno(32), syscall.Errno(33)
+	return errors.Is(err, fs.ErrPermission) || errors.Is(err, errorSharingViolation) || errors.Is(err, errorLockViolation)
 }

@@ -7,12 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -688,5 +690,75 @@ func TestFileWatchMetadata(t *testing.T) {
 	fileWatchTestNotice(t, w, "a", platform.FileWatchNotice{Kind: platform.FileWatchWrite})
 	if batch := fileWatchTestBatch(t, w); !slices.Equal(batch, []FileEvent{{Op: FileWrite, Path: "a"}}) {
 		t.Fatalf("batch = %+v", batch)
+	}
+}
+
+// What the watch can't look at, as a directory without permission or a
+// file the system holds (pagefile.sys), is skipped rather than ending the
+// watch.
+func TestFileWatchInaccessible(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "busy"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	locked := runtime.GOOS != "windows" && os.Geteuid() != 0
+	if locked {
+		for _, p := range []string{"locked/a", "unsearchable/b"} {
+			if err := os.MkdirAll(filepath.Join(dir, filepath.Dir(p)), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, p), nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.Chmod(filepath.Join(dir, "locked"), 0); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(filepath.Join(dir, "unsearchable"), 0400); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			os.Chmod(filepath.Join(dir, "locked"), 0700)
+			os.Chmod(filepath.Join(dir, "unsearchable"), 0700)
+		})
+	}
+	var busy error = fs.ErrPermission
+	if runtime.GOOS == "windows" {
+		busy = syscall.Errno(32) // ERROR_SHARING_VIOLATION
+	}
+	fb.FileWatchAddHook = func(target platform.FileWatchTarget) error {
+		if filepath.Base(target.Path) == "busy" {
+			return busy
+		}
+		return nil
+	}
+	defer func() { fb.FileWatchAddHook = nil }()
+	w, err := WatchFiles(context.Background(), dir, FileWatchOptions{Recursive: true, Debounce: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	for _, target := range w.native.(*fake.FileWatch).Targets() {
+		if filepath.Base(target.Path) == "busy" {
+			t.Error("busy enrolled")
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "x"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	fileWatchTestNotice(t, w, ".", platform.FileWatchNotice{Name: "x", Kind: platform.FileWatchCreate})
+	fileWatchTestNotice(t, w, ".", platform.FileWatchNotice{})
+	if batch := fileWatchTestBatch(t, w); !slices.Equal(batch, []FileEvent{{Op: FileCreate, Path: "x"}}) {
+		t.Fatalf("batch = %+v", batch)
+	}
+	if locked {
+		fileWatchTestNotice(t, w, "unsearchable", platform.FileWatchNotice{})
+		if err := os.Remove(filepath.Join(dir, "x")); err != nil {
+			t.Fatal(err)
+		}
+		fileWatchTestNotice(t, w, ".", platform.FileWatchNotice{Name: "x"})
+		if batch := fileWatchTestBatch(t, w); !slices.Equal(batch, []FileEvent{{Op: FileRemove, Path: "x"}}) {
+			t.Fatalf("batch = %+v", batch)
+		}
 	}
 }
