@@ -283,7 +283,8 @@ func (_handle *Context) CloseToast(id string) {
 // routers go to their targets at once, as SwiftUI's disablesAnimations:
 // for a change that should not show as motion, as restoring a window's
 // state or jumping to a search result. Call it before building what
-// changes.
+// changes. Keyframes and timelines, which play on their own rather than
+// towards a target, go on as they were: Seek a Timeline to jump it.
 func (_handle *Context) DisableAnimations() {
 	_ctx := _handle.build()
 	if _ctx == nil {
@@ -4807,11 +4808,19 @@ func (_handle Element) TextSelection() (int, int) {
 //
 //	card := ui.Column(c)
 //	tl := card.Timeline("intro", ui.TimelineOptions{Run: app.opened})
-//	x := tl.To(ui.Tween{From: -200, To: 0, Duration: 400 * time.Millisecond, Ease: ui.EaseOut})
+//	x := tl.Tween(ui.Tween{From: -200, To: 0, Duration: 400 * time.Millisecond})
 //	card.Translate(x, 0)
 //
-// Key tells apart the timelines of the element, as it does its Keyframes.
-// Play the timeline again, or a changed one, by changing o.Run.
+// Key tells apart the timelines of the element, as it does its Keyframes,
+// and an element asks for each of its timelines once per build. Play the
+// timeline again, or a changed one, by changing o.Run. The *Timeline is
+// valid while the view builds this frame.
+//
+// While the desktop asks for less motion (Preferences.ReduceMotion), a
+// timeline that would play is at once where it would come to rest, but
+// Seek, Progress and Paused still put and hold its playhead, as a drag
+// still moves a Draggable element. DisableAnimations does not change a
+// timeline, which plays on its own, as Keyframes do: jump it with Seek.
 func (_handle Element) Timeline(key any, o TimelineOptions) *Timeline {
 	_node := _handle.node()
 	if _node == nil {

@@ -365,7 +365,8 @@ func (c *context) AnimationFrame() { c.rt.animating = true }
 // routers go to their targets at once, as SwiftUI's disablesAnimations:
 // for a change that should not show as motion, as restoring a window's
 // state or jumping to a search result. Call it before building what
-// changes.
+// changes. Keyframes and timelines, which play on their own rather than
+// towards a target, go on as they were: Seek a Timeline to jump it.
 func (c *context) DisableAnimations() { c.rt.instantFrame = c.rt.frame }
 
 // instant reports whether this frame shows changes at once
