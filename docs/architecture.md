@@ -994,7 +994,16 @@ build` like mygo-runtime and released with the same version.
     methods, finds its key from US layout. Mouse reports go through the
     mouse encoder while the program asks for them; otherwise a selection
     gesture of libghostty-vt turns presses and drags into selections, with
-    the clicks it counts itself.
+    the clicks it counts itself. Keys meet the terminal's keybinds before
+    the encoder: Ghostty's defaults for the platform with the app's over
+    them, as Ghostty layers its config. A paste reads the clipboard on the
+    main thread as it starts (every format for `OnPaste` or a program in
+    mode 5522, else the text), and the terminal keeps a snapshot: the
+    program's read (OSC 5522) is answered during `Write`, on the reader's
+    goroutine under the terminal's lock, where waiting for the main
+    thread could deadlock. The binding gathers the library's reply and
+    hands it over in one piece, which the input queue writes in pieces
+    that report their progress.
   - *Shipping the library.* `mygo-plugin.json` names its build for each
     platform, published as release assets with their SHA-256 checksums.
     The CLI puts them into apps

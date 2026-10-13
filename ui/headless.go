@@ -25,11 +25,9 @@ type headless struct {
 	clipboard string
 	// clipboardData is what WriteClipboardData copied, with its formats.
 	clipboardData transfer.Data
-	// clipboardImage is the clipboard's image as PNG, for tests.
-	clipboardImage []byte
-	cursor         Cursor
-	ime            platform.TextInputState
-	opened         []string
+	cursor        Cursor
+	ime           platform.TextInputState
+	opened        []string
 	// escapes counts the Escapes nothing handled.
 	escapes int
 	openErr error
@@ -119,8 +117,7 @@ func (h *headless) writeClipboardData(d transfer.Data) {
 	h.clipboard = string(b)
 }
 
-// readClipboardImage gives the image a test set with SetClipboardImage.
-func (h *headless) readClipboardImage() []byte { return h.clipboardImage }
+func (h *headless) clipboardFormats() []transfer.Format { return h.readClipboardData(nil).Formats() }
 
 func (h *headless) startDataDrag(d transfer.Data, local any, o transfer.DragOptions, x, y float32) error {
 	h.dragData, h.dragLocal, h.dragOptions = d.Snapshot(), local, o
@@ -570,9 +567,6 @@ func (t *Tester) SetClipboardData(d transfer.Data) {
 	b, _ := d.Read(transfer.Text)
 	t.h.clipboard = string(b)
 }
-
-// SetClipboardImage sets the clipboard's image, as PNG.
-func (t *Tester) SetClipboardImage(png []byte) { t.h.clipboardImage = png }
 
 // Cursor returns the pointer shape the view shows.
 func (t *Tester) Cursor() Cursor { return t.h.cursor }

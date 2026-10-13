@@ -228,7 +228,9 @@ except in browsers, which cannot. `c.ReadClipboard`,
 moment later, as the system opens it, with an error when no app could,
 and the view builds a frame anew. `Services.ReadClipboardData` and
 `WriteClipboardData` read and write several formats at once, as a rich
-text editor copies its own, HTML and plain text. A text field of the app's
+text editor copies its own, HTML and plain text, and
+`ClipboardFormats` lists the clipboard's without reading them, as a
+terminal decides what a paste reads. A text field of the app's
 own gets `InputSelect` when a screen reader moves its selection: the runes
 `Start` to `End` of the text its `Access` describes.
 
