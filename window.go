@@ -238,6 +238,10 @@ type Window struct {
 	conn         *surface.Conn
 	devTools     bool
 	invalidating atomic.Bool
+	// userScripts are the scripts the window's pages run at document
+	// start: the bridge, the preferences and the preload script. Main
+	// thread only.
+	userScripts []platform.UserScript
 	// secret starts every message of the bridge in this window's pages.
 	// Only the bridge knows it, so messages posted from elsewhere (an
 	// iframe of another origin) are ignored.
@@ -538,6 +542,8 @@ func (w *Window) platformOptions(o *WindowOptions) *platform.WindowOptions {
 	if po.PreloadScript != "" {
 		p.UserScripts = append(p.UserScripts, platform.UserScript{Source: po.PreloadScript})
 	}
+	// Kept to replace the preferences' (sendPreferences).
+	w.userScripts = p.UserScripts
 	return p
 }
 

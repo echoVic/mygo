@@ -35,6 +35,9 @@ type Backend struct {
 	envErr     error
 	envStarted bool
 	envWaiters []func()
+	// envResult is whether the environment was created (1) or failed (2),
+	// 0 before, for WebViewAvailable, which any goroutine may call.
+	envResult atomic.Int32
 
 	menus menuTable
 
@@ -137,6 +140,9 @@ func (b *Backend) startEnvironment() error {
 		b.env, b.envErr = env, err
 		if err != nil {
 			log.Print(err)
+			b.envResult.Store(2)
+		} else {
+			b.envResult.Store(1)
 		}
 		waiters := b.envWaiters
 		b.envWaiters = nil

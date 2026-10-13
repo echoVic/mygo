@@ -231,6 +231,8 @@ func (w *window) Print()                                                   {}
 func (w *window) CapturePage(cb func([]byte, error))                       { cb(nil, errUnsupported) }
 func (w *window) PrintToPDF(_ platform.PDFOptions, cb func([]byte, error)) { cb(nil, errUnsupported) }
 
+func (w *window) SetUserScripts([]platform.UserScript) {}
+
 func (w *window) CallAsyncFunction(_ string, cb func(string, error)) {
 	cb("", errUnsupported)
 }

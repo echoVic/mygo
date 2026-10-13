@@ -123,11 +123,12 @@ type Backend interface {
 	// those of earlier runs too.
 	RemoveAllNotifications()
 
-	// WebViewSupported reports whether the system webview is there, and so
+	// WebViewAvailable reports whether the system webview is there, and so
 	// whether windows showing web pages can work: WKWebView on macOS,
 	// WebKitGTK on Linux, the WebView2 Runtime on Windows. A window showing
 	// native UI needs none, so an app whose windows all do runs without one.
-	WebViewSupported() bool
+	// It may be called before Init, from any goroutine.
+	WebViewAvailable() bool
 }
 
 // AppOptions configures Backend.Init.
@@ -441,6 +442,11 @@ type Page interface {
 	IsLoading() bool
 	// Eval runs JavaScript in the main frame and ignores the result.
 	Eval(js string)
+	// SetUserScripts replaces the scripts of WindowOptions.UserScripts:
+	// the documents the page loads from then on run the new ones, while
+	// the current document keeps what it ran. Scripts a backend injects
+	// itself, as the title bar's, stay.
+	SetUserScripts(scripts []UserScript)
 	// CallAsyncFunction runs body as the body of an async function in the
 	// main frame, awaits it and reports the returned value, which the
 	// caller arranges to be a string. err is non-nil when the body fails to
@@ -813,6 +819,11 @@ type Preferences struct {
 	// ReduceMotion asks for less motion: macOS's Reduce Motion, Windows's
 	// animation effects and GNOME's animations turned off.
 	ReduceMotion bool
+	// ReduceTransparency asks for opaque surfaces in place of translucent
+	// ones: macOS's Reduce Transparency, Windows's transparency effects
+	// turned off, prefers-reduced-transparency in browsers. Linux desktops
+	// have no such setting.
+	ReduceTransparency bool
 	// HighContrast asks for more contrast: macOS's Increase Contrast,
 	// Windows's contrast themes, the desktop portal's higher contrast.
 	HighContrast bool
@@ -854,8 +865,8 @@ type Power interface {
 
 // NetworkStatus is the state of the computer's network connection.
 type NetworkStatus struct {
-	Online      bool
-	Constrained bool // expensive, metered or in a low data mode
+	Online  bool
+	Metered bool // expensive, metered or in a low data mode
 }
 
 // Network reports the state of the computer's network connection.
