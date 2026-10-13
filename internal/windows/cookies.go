@@ -3,6 +3,7 @@
 package windows
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -72,7 +73,8 @@ type heldWindow struct {
 type cookieRequest struct {
 	b        *Backend
 	n        uint64
-	window   *window // whose web view's manager it uses, or nil
+	window   *window // whose web view it uses, or nil for the hidden one
+	webview  uintptr // borrowed while the request runs
 	manager  uintptr
 	finished bool
 	done     func([]platform.Cookie, error)
@@ -86,7 +88,7 @@ func (r *cookieRequest) finish(c []platform.Cookie, err error) {
 	s := &r.b.cookies
 	delete(s.requests, r)
 	release(r.manager)
-	r.manager = 0
+	r.webview, r.manager = 0, 0
 	r.done(c, err)
 	oldest := s.next
 	for q := range s.requests {
@@ -169,7 +171,7 @@ func (a appController) withCookieManager(done func([]platform.Cookie, error), st
 			r.finish(nil, err)
 			return
 		}
-		r.manager = manager
+		r.webview, r.manager = webview, manager
 		start(r)
 	}
 	if w := b.pageWebView(); w != nil {
@@ -411,61 +413,100 @@ func (a appController) SetCookie(c platform.Cookie, done func(error)) {
 			r.finish(nil, hresultError("cookies: AddOrUpdateCookie", hr))
 			return
 		}
-		r.settle(true, func(k platform.CookieKey, value string) bool {
-			return k == platform.CookieKey{Name: c.Name, Domain: c.Domain, Path: c.Path} && value == c.Value
-		}, time.Now().Add(2*time.Second))
+		want := storedCookie{platform.CookieKey{Name: c.Name, Domain: c.Domain, Path: c.Path}, c.Value}
+		r.settle(true, func(s storedCookie) bool { return s == want }, time.Now().Add(cookieSettleTime),
+			"the engine did not keep the cookie")
 	})
 }
 
 func (a appController) DeleteCookie(key platform.CookieKey, done func(error)) {
 	a.withCookieManager(func(_ []platform.Cookie, err error) { done(err) }, func(r *cookieRequest) {
-		hr := comCall(r.manager, cookieManagerDeleteWithDomainAndPath, uintptr(unsafe.Pointer(u16(key.Name))), uintptr(unsafe.Pointer(u16(key.Domain))), uintptr(unsafe.Pointer(u16(key.Path))))
-		if failed(hr) {
-			r.finish(nil, hresultError("cookies: DeleteCookiesWithDomainAndPath", hr))
-			return
-		}
-		r.settle(false, func(k platform.CookieKey, _ string) bool { return k == key }, time.Now().Add(2*time.Second))
+		// The cookies of key there are now, which must go; a page may set
+		// the cookie again meanwhile.
+		r.stored(func(s storedCookie) bool { return s.CookieKey == key }, func(old map[storedCookie]bool) {
+			if len(old) == 0 {
+				r.finish(nil, nil)
+				return
+			}
+			hr := comCall(r.manager, cookieManagerDeleteWithDomainAndPath, uintptr(unsafe.Pointer(u16(key.Name))), uintptr(unsafe.Pointer(u16(key.Domain))), uintptr(unsafe.Pointer(u16(key.Path))))
+			if failed(hr) {
+				r.finish(nil, hresultError("cookies: DeleteCookiesWithDomainAndPath", hr))
+				return
+			}
+			r.settle(false, func(s storedCookie) bool { return old[s] }, time.Now().Add(cookieSettleTime),
+				"the cookie is still there")
+		})
 	})
 }
 
-// ClearCookies deletes every cookie of the profile.
+// ClearCookies deletes every cookie of the profile: those there now must
+// go, pages may set new ones meanwhile.
 func (a appController) ClearCookies(done func(error)) {
 	a.withCookieManager(func(_ []platform.Cookie, err error) { done(err) }, func(r *cookieRequest) {
-		if hr := comCall(r.manager, cookieManagerDeleteAll); failed(hr) {
-			r.finish(nil, hresultError("cookies: DeleteAllCookies", hr))
-			return
-		}
-		r.settle(false, func(platform.CookieKey, string) bool { return true }, time.Now().Add(2*time.Second))
+		r.stored(func(storedCookie) bool { return true }, func(old map[storedCookie]bool) {
+			if hr := comCall(r.manager, cookieManagerDeleteAll); failed(hr) {
+				r.finish(nil, hresultError("cookies: DeleteAllCookies", hr))
+				return
+			}
+			r.settle(false, func(s storedCookie) bool { return old[s] }, time.Now().Add(cookieSettleTime),
+				"cookies are still there")
+		})
 	})
 }
 
-// settle finishes once a cookie matches, when present, or none does:
-// WebView2 changes cookies after its calls return, and GetCookies may not
-// see the change for some milliseconds. It gives up at deadline, as when
-// the engine refused a cookie or pages set new ones.
-func (r *cookieRequest) settle(present bool, match func(key platform.CookieKey, value string) bool, deadline time.Time) {
+// cookieSettleTime is how long a change may take to show in GetCookies.
+const cookieSettleTime = 2 * time.Second
+
+// storedCookie is what tells a cookie apart from a page's newer one.
+type storedCookie struct {
+	platform.CookieKey
+	value string
+}
+
+// stored passes the cookies that match to then.
+func (r *cookieRequest) stored(match func(storedCookie) bool, then func(map[storedCookie]bool)) {
 	r.enumerate("", func(list uintptr) error {
-		found := false
+		found := map[storedCookie]bool{}
 		err := cookieEach(list, func(c uintptr) error {
-			var fields [4]string
-			for i, slot := range []int{cookieGetName, cookieGetDomain, cookieGetPath, cookieGetValue} {
-				v, err := cookieString(c, slot)
-				if err != nil {
-					return err
-				}
-				fields[i] = v
+			s, err := readStoredCookie(c)
+			if err == nil && match(s) {
+				found[s] = true
 			}
-			found = found || match(platform.CookieKey{Name: fields[0], Domain: strings.ToLower(fields[1]), Path: fields[2]}, fields[3])
-			return nil
+			return err
 		})
 		if err != nil {
 			return err
 		}
-		if found != present && time.Now().Before(deadline) {
-			r.settle(present, match, deadline)
-			return nil
-		}
-		r.finish(nil, nil)
+		then(found)
 		return nil
+	})
+}
+
+func readStoredCookie(c uintptr) (storedCookie, error) {
+	var fields [4]string
+	for i, slot := range []int{cookieGetName, cookieGetDomain, cookieGetPath, cookieGetValue} {
+		v, err := cookieString(c, slot)
+		if err != nil {
+			return storedCookie{}, err
+		}
+		fields[i] = v
+	}
+	return storedCookie{platform.CookieKey{Name: fields[0], Domain: strings.ToLower(fields[1]), Path: fields[2]}, fields[3]}, nil
+}
+
+// settle finishes once a cookie matches, when present, or none does:
+// WebView2 changes cookies after its calls return, and GetCookies may not
+// see the change for some milliseconds. GetCookies("") lists every
+// cookie, HttpOnly ones included, so a change that does not show by the
+// deadline did not happen: the request fails with why.
+func (r *cookieRequest) settle(present bool, match func(storedCookie) bool, deadline time.Time, why string) {
+	r.stored(match, func(found map[storedCookie]bool) {
+		if (len(found) > 0) == present {
+			r.finish(nil, nil)
+		} else if time.Now().Before(deadline) {
+			r.settle(present, match, deadline, why)
+		} else {
+			r.finish(nil, errors.New("mygo: cookies: "+why))
+		}
 	})
 }

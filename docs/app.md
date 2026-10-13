@@ -378,9 +378,12 @@ may carry the user's credentials: rather than binding the module to the
 pages, bind a backend method that does what the page needs.
 
 On Windows, WebView2 gives cookies only through a web view: before a
-window shows a page, the methods make a hidden one, which also makes the
-WebView2 browser process start, and a window's first page waits for the
-cookie calls under way when its web view is made. On Linux they need
+window shows a page, the methods, and `App.ClearBrowsingData`, make a
+hidden one, which also makes the WebView2 browser process start, and a
+window's first page waits for the calls under way when its web view is
+made. WebView2 applies changes after its calls return, so the methods
+wait until the change shows, and fail when it does not within two
+seconds, as when the engine refuses a cookie. On Linux they need
 WebKitGTK 2.42 or newer, and `Set` libsoup 2.70 or newer; WebKitGTK keeps
 the cookies in `cookies.sqlite` of the app's user data directory
 (`~/.config/<Name>`).
