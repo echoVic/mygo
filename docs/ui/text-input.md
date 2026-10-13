@@ -94,11 +94,22 @@ for _, m := range mentions(app.draft) {
 }
 ```
 
-The ranges are runes of the text, found in it each frame. Where they
-overlap, the one starting first shows, or the one given first when they
-start together; a password shows none. While an input method composes,
-its text sits unstyled at the caret and the ranges keep their style
-around it.
+The ranges are runes of the text, found in it each frame. They may overlap
+and nest, as the attributes of an attributed string (`NSAttributedString`)
+do: a range sets its `Color` when its alpha is not zero and its `Weight`
+when it is not zero, and where ranges overlap, each of the two is the last
+given range's that sets it, across the calls of the frame. A bold range
+with a colored mention inside it shows the mention bold and colored:
+
+```go
+in.TextRanges(
+	ui.TextRange{Start: 0, End: 40, Weight: 700},
+	ui.TextRange{Start: 10, End: 16, Color: t.Accent},
+)
+```
+
+A password shows none. While an input method composes, its text sits
+unstyled at the caret and the ranges keep their style around it.
 
 A text area is at least a few lines high and grows with its text; given a
 height, it scrolls within it, with the wheel and a scroll bar, and keeps
