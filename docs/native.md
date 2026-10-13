@@ -410,45 +410,70 @@ case errors.Is(err, mygo.ErrSecretNotFound):
 
 ## Watching files
 
-`mygo.WatchFiles` watches a directory, and with `Recursive` the
-directories in it, for changes to the files in it. It returns once
-everything is watched, and `Next` waits for each change; use it on a
+`mygo.WatchFiles` watches a file or a directory, and with `Recursive` the
+directories in it, for changes. It returns once everything is watched, and
+`Next` waits for the next changes and returns them in a batch; use it on a
 goroutine of its own:
 
 ```go
-w, err := mygo.WatchFiles(ctx, dir, mygo.FileWatchOptions{Recursive: true})
+w, err := mygo.WatchFiles(ctx, dir, mygo.FileWatchOptions{
+	Recursive: true,
+	Ignore: func(p string, isDir bool) bool {
+		return isDir && (path.Base(p) == "node_modules" || path.Base(p) == ".git")
+	},
+})
 if err != nil {
 	return err
 }
 go func() {
 	defer w.Close()
 	for {
-		event, err := w.Next(ctx)
+		events, err := w.Next(ctx)
 		if err != nil {
-			return // io.EOF once closed
+			return // io.EOF once closed, or once dir went away
 		}
-		log.Println(event.Op, event.Path)
+		for _, e := range events {
+			log.Println(e.Op, e.Path)
+		}
 	}
 }()
 ```
 
-An event's `Path` is relative to the directory and separated by slashes,
-`.` for the directory itself, and `Op` is `mygo.FileCreate`, `FileWrite`,
-`FileRemove` or `FileRename`, with `OldPath` where a rename moved from.
-What is already there is not reported. Changes wait for 50 ms of quiet
-(`Debounce`) before they are reported, and never more than 500 ms
+An event's `Path` is relative to what is watched (`w.Root()`, its path
+with symlinks resolved) and separated by slashes, `.` for itself, and `Op`
+is `mygo.FileCreate`, `FileWrite`, `FileRemove` or `FileRename`, with
+`OldPath` where a rename moved from. What is already there is not
+reported. Changes wait for 50 ms of quiet (`Debounce`, right away when
+negative) before they are reported, and never more than 500 ms
 (`MaxDelay`). A watch compares what it sees with what it saw, so events say
 what is different, not every step that made it so: treat them as hints to
-read the files again.
+read the files again. A write is a file whose size or modification time
+changed, or that the system says was written: permissions and other
+metadata, which indexers and antivirus touch, are not reported, nor are
+directories written, whose changes are their entries'.
 
-Canceling the context given to `WatchFiles`, or `Close`, stops the watch;
-`Done` is closed once it has released its handles, and the app stops its
-watches when it quits. A watch stops with `mygo.ErrWatchOverflow` when more
-than 1024 events (`Buffer`) waited for `Next`, after which read the files
-again and start a new one, and with `mygo.ErrWatchLimit` when the directory
-has more than 8192 files and directories (`MaxEntries`). The
-[watch plugin](plugins/watch.md) gives pages watches of the directories an
-app chooses, and says how each platform watches.
+A watch doesn't look again until `Next` has taken the last batch: when the
+app is busy, what changed meanwhile comes in the next batch, so nothing is
+lost and nothing piles up. What the watch can't look at, such as a
+directory without permission, is left out rather than ending it.
+`Ignore` leaves out files and directories by
+their path: a directory it ignores is never opened, and doesn't count in
+`MaxEntries`.
+
+A file is watched through its directory, as [fsnotify](https://github.com/fsnotify/fsnotify)
+recommends: a file replaced, as editors save, is a write of `.`, one
+removed a removal, and one that appears again a creation. When the
+directory itself, or the directory of the file, is removed, renamed or
+replaced, the last batch has a `FileRemove` of `.`, and `Next` then returns
+`io.EOF`.
+
+`Close`, or canceling the context given to `WatchFiles`, stops the watch:
+`Next` returns `io.EOF`, and `Done` is closed once it has released its
+handles. The app stops its watches when it quits. A watch stops with
+`mygo.ErrWatchLimit` when the directory has more than 8192 files and
+directories (`MaxEntries`). The [watch plugin](plugins/watch.md) gives
+pages watches of the directories and files an app chooses, and says how
+each platform watches.
 
 ## Global shortcuts
 

@@ -223,7 +223,7 @@ next launch.
 
 ## Files changed by other apps
 
-Documents watch the folders of their files (see [watching
+Documents watch their files (see [watching
 files](native.md#watching-files)), and look at their file when their window
 is focused, as VS Code and Notepad++ do, since watches miss changes:
 
@@ -232,7 +232,7 @@ is focused, as VS Code and Notepad++ do, since watches miss changes:
 - a document with unsaved changes is in conflict: its state says so, and
   saving asks whether to keep it or the other app's ("Save Anyway",
   "Revert");
-- a file renamed by another app is followed;
+- a file renamed by another app, in its folder, is followed;
 - a deleted file leaves its document open, `Deleted` in its state, and
   saving writes the file again.
 

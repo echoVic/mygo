@@ -60,6 +60,8 @@ type Backend struct {
 	FileWatches      []*FileWatch
 	FileWatchError   error
 	FileWatchSubtree bool
+	// FileWatchAddHook is the AddHook of the file watches made.
+	FileWatchAddHook func(platform.FileWatchTarget) error
 	// URLSchemes are the registered URL schemes, by scheme: "id name".
 	URLSchemes map[string]string
 	// LoginItem is the command that starts the app at login: "id name arg".
