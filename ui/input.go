@@ -840,7 +840,7 @@ func (rt *engine) updateTextInput() {
 	var t platform.TextInputState
 	base := 0
 	if s := rt.states[rt.focused]; s != nil && s.textClient != nil && rt.windowFocus() && s.flags&flagDisabled == 0 && (s.editor == nil || !s.editor.readOnly) {
-		t.Active, t.Client = true, s.textAdapter
+		t.Active, t.Client, t.NoInputMethod = true, s.textAdapter, s.noIME
 		sel := s.textAdapter.Selection()
 		caret := sel.Caret()
 		if bounds, _, ok := s.textAdapter.BoundsForRange(TextInputRange{Start: caret, End: caret}); ok {
@@ -851,7 +851,7 @@ func (rt *engine) updateTextInput() {
 		}
 	} else if s != nil && s.editor == nil && s.input != nil && s.takesText && rt.windowFocus() {
 		// An element taking text itself: no text around the caret.
-		t.Active = true
+		t.Active, t.NoInputMethod = true, s.noIME
 		r := transformRect(s.world, Rect{s.x + s.caret.X, s.y + s.caret.Y, s.caret.W, s.caret.H})
 		t.Caret = platform.RectF{X: float64(r.X), Y: float64(r.Y), W: float64(r.W), H: float64(r.H)}
 	}

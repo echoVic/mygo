@@ -220,7 +220,9 @@ The function reports whether it took the event; one it leaves goes on to
 shortcuts, Tab, context menus and scroll containers as usual, and keys that
 the window or an element around the focus handles with `Shortcut` go there
 first. `TextCaret` turns on the system's input methods for such an element
-while it has the focus, composing at the caret it gives. `c.ReadClipboard`,
+while it has the focus, composing at the caret it gives; `InputMethod(false)`
+turns them off again while keys still type text, as for Vim's normal mode,
+except in browsers, which cannot. `c.ReadClipboard`,
 `c.WriteClipboard` and `c.OpenURL` copy, paste and open links for them;
 `c.OpenURLThen` opens a link too, and its function gets what came of it a
 moment later, as the system opens it, with an error when no app could,

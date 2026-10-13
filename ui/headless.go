@@ -522,8 +522,12 @@ func (t *Tester) SetFocused(focused bool) {
 
 // Compose shows text as an input method's composition, with its caret at
 // rune caret, as while typing in Chinese or Japanese; an empty text ends
-// it. Type commits the text.
+// it. Type commits the text. Nothing is composed while the focused element
+// turned input methods off (InputMethod), as on the desktop.
 func (t *Tester) Compose(text string, caret int) {
+	if t.h.ime.Active && t.h.ime.NoInputMethod {
+		return
+	}
 	t.send(platform.SurfaceEvent{Kind: platform.TextComposition, Text: text, Caret: caret})
 }
 
@@ -535,10 +539,18 @@ func (t *Tester) Command(name string) {
 }
 
 // TextCaret returns where input methods compose, and whether one would:
-// the caret of the focused text input, or of an element's TextCaret.
+// the caret of the focused text input, or of an element's TextCaret, and
+// not while it turned them off (InputMethod).
 func (t *Tester) TextCaret() (Rect, bool) {
 	c := t.h.ime.Caret
-	return Rect{float32(c.X), float32(c.Y), float32(c.W), float32(c.H)}, t.h.ime.Active
+	return Rect{float32(c.X), float32(c.Y), float32(c.W), float32(c.H)}, t.h.ime.Active && !t.h.ime.NoInputMethod
+}
+
+// TextInputActive reports whether the focused element takes text, typed
+// or composed (HandleTextInput, TextCaret), and whether it turned input
+// methods off (InputMethod), as the window tells the system.
+func (t *Tester) TextInputActive() (active, noInputMethod bool) {
+	return t.h.ime.Active, t.h.ime.NoInputMethod
 }
 
 // Clipboard returns the text the view copied; SetClipboard sets the text

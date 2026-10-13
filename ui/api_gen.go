@@ -3553,6 +3553,24 @@ func (_handle Element) InView() bool {
 	return _node.InView()
 }
 
+// InputMethod sets whether the system's input methods compose text for the
+// element while it has the keyboard focus, as they do by default for one
+// that takes text (HandleTextInput, TextCaret). Turned off, keys type the
+// characters of the keyboard's layout, which come as InputText, and
+// nothing is composed: a mode that reads letters as commands, as Vim's
+// normal mode, gets j as j with a Chinese input method on, as Neovide and
+// winit's set_ime_allowed(false) have it. Browsers cannot turn input
+// methods off, and compose still.
+func (_handle Element) InputMethod(on bool) Element {
+	_node := _handle.node()
+	if _node == nil {
+		return Element{}
+	}
+	_ctx := _node.c
+	_ = _ctx
+	return wrapElement(_node.InputMethod(on))
+}
+
 // InsetShadow adds an inner box shadow, as CSS's box-shadow: inset: offset
 // by x and y, blurred by blur and grown inward by spread DIPs. It shows
 // only inside the box's padding edge, within its border and rounded

@@ -578,6 +578,7 @@ type state struct {
 	textAdapter *textInputAdapter
 	caret       Rect
 	takesText   bool
+	noIME       bool
 	// copyData is what a Selectable container's selection copies as
 	// (CopyData).
 	copyData func(parts []SelectedText) transfer.Data

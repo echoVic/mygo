@@ -1912,7 +1912,12 @@ either.
   it, moving over it or scrolling over it; once it takes a press, the
   moves and the release come to it, as to a pressed element. Its
   `TextCaret` turns on the input method at that caret, with no text around
-  it. `ui.Shape` lays out text without the cache of layouts, for widgets
+  it; `InputMethod(false)` (`TextInputState.NoInputMethod`) keeps text on
+  but input methods off, as winit's `set_ime_allowed(false)`: macOS skips
+  `interpretKeyEvents:` and inserts the event's `characters`, Windows
+  disassociates the IMM context and keeps `WM_CHAR`, and GTK takes the
+  focus from the IM context and sends the keyval's character; browsers
+  cannot. `ui.Shape` lays out text without the cache of layouts, for widgets
   that keep their glyphs, and `Painter.Glyphs` draws them where they
   placed them.
   `HandleTextInput` connects a custom element's application-owned
