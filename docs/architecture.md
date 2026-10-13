@@ -57,7 +57,8 @@ framework safely. Read it before changing anything under `internal/`.
 ├── protocol.go         custom schemes served by http.Handler, FileServer
 ├── frontend.go         the app's frontend: relative URLs, devUrl, mygo://localhost
 ├── menu.go             Menu/MenuItem model, roles, native item updates
-├── cookies.go          Cookies: the pages' cookies, checked and keyed by name, domain and path
+├── cookies.go          Cookies: the pages' cookies, checked, keyed by name, domain and path, filtered by CookieFilter
+├── recent_docs.go jumplist.go: recent documents (Open Recent and the system's lists), the jump list
 ├── dialog.go modules.go clipboard.go: shell, clipboard, screen, theme, tray, shortcuts, notifications
 ├── watch.go watch_scan.go: WatchFiles, and what a watch saw of its directory
 ├── document*.go        NewDocuments: documents, their saving, recovery copies, watches, menus
@@ -1562,7 +1563,10 @@ files (`Backend.ReplaceFile`).
   roles; `refreshDocumentMenus` enables them for the focused window's
   document when focus or a document's state changes, and
   `updateRecentMenus` rebuilds the Open Recent submenus from
-  `recent-documents.json`.
+  `recent-documents.json` (`recent_docs.go`), which `App.AddRecentDocument`
+  and `ClearRecentDocuments` write, for documents and other apps alike,
+  before telling the system; in an app without documents an item goes to
+  `OnOpenFile`.
 
 ## Native UI (`ui`)
 
@@ -3431,14 +3435,14 @@ which npm allows only for packages that exist: the first release uses an
 | window icon | ignored | `gtk_window_set_icon` | `WM_SETICON` at the window's DPI |
 | URL schemes | Info.plist (`urlSchemes`); `RegisterURLScheme` makes the app the default handler | desktop entry + `mimeapps.list` | `HKCU\Software\Classes` |
 | downloads | `shouldPerformDownload`, non-displayable or attachment responses → `WKDownload` delegate | `download-started` / `decide-destination` on the web context; response policy for attachments | `DownloadStarting` (`ICoreWebView2_4`), replacing WebView2's download UI |
-| Cookies | the default `WKWebsiteDataStore`'s `WKHTTPCookieStore` | the default web context's `WebKitCookieManager` (2.42+, kept in memory); libsoup 3 or 2.4 to match WebKitGTK 4.1 or 4.0 | `ICoreWebView2CookieManager` (`ICoreWebView2_2`) of a window's web view; `put_Expires` called with `comCallFloat` |
+| Cookies | the default `WKWebsiteDataStore`'s `WKHTTPCookieStore`, URLs matched in Go (`platform.CookieMatchesURL`), `Set` through `NSHTTPCookie`'s parser with a stand-in name and value; `Clear` with `removeDataOfTypes:` | the default web context's `WebKitCookieManager` (2.42+; `get_cookies` for a URL), kept in `cookies.sqlite` of the user data directory (`set_persistent_storage`, as WebKitGTK keeps them in memory otherwise); libsoup 3 or 2.4 to match WebKitGTK 4.1 or 4.0; `Clear` with `webkit_website_data_manager_clear` | `ICoreWebView2CookieManager` (`ICoreWebView2_2`) of a window's web view, or before one shows a page of a hidden web view of the app window, closed once one does; a window's first navigation waits for the calls under way; `ClearBrowsingData` goes the same way; changes are polled with `GetCookies` until they show, failing after 2 s; `GetCookies(uri)`, `DeleteAllCookies`; `put_Expires` called with `comCallFloat` |
 | ClearBrowsingData | default `WKWebsiteDataStore`, all types | the web context's website data manager | the WebView2 profile's `ClearBrowsingDataAll` (needs a window) |
 | permissions | `WKUIDelegate` media capture (camera, microphone) | `permission-request` (camera, microphone, geolocation, notifications) | `PermissionRequested` (the same four; WebView2 asks about others) |
 | file associations | `CFBundleDocumentTypes`; files arrive with `application:openURLs:` | desktop entry `MimeType` (`%U`), a shared-mime-info package in the .deb for types the app defines | ProgIDs and `OpenWithProgids` written by the installer |
 | document windows | `representedURL` (proxy icon, Command-click folder menu) and `setDocumentEdited:` (the dot), then the traffic lights are laid out again | the core puts `*` before the title | the core puts `*` before the title |
 | replacing a document's file | `-[NSFileManager replaceItemAtURL:withItemAtURL:…]` (permissions, dates, extended attributes, ACLs, identity) | rename after `chmod` and `lchown` to the target's | `ReplaceFileW`, retried on sharing violations |
 | recent documents | `noteNewRecentDocumentURL:` / `clearRecentDocuments:` of the shared `NSDocumentController` (the Dock menu) | `gtk_recent_manager_add_item`, removing the items of `g_get_application_name()` | `SHAddToRecentDocs` (`SHARD_PATHW`), `IApplicationDestinations::RemoveAllDestinations`; the process keeps the AppUserModelID the shell derives from its path, which the installer's shortcuts have too |
-| jump list tasks | ignored | ignored | `ICustomDestinationList`: the Recent category, `AddUserTasks` with an `IShellLinkW` per task (`PKEY_Title`), `CommitList` |
+| jump list | ignored | ignored | `ICustomDestinationList`, committed whole from what `App.JumpList` keeps: the Recent category, `AddUserTasks` with an `IShellLinkW` per task (`PKEY_Title`, description, working directory, arguments quoted with `syscall.EscapeArg`), `CommitList` |
 | Dock menu | `applicationDockMenu:` | ignored | ignored |
 | PrintToPDF | `printOperationWithPrintInfo:` save job (`NSJobSavingURL`), fit to width | `WebKitPrintOperation` to GTK's "Print to File" | DevTools `Page.printToPDF` |
 | power events | NSWorkspace sleep/wake, `com.apple.screenIsLocked` distributed notifications | logind `PrepareForSleep` (system bus), screen saver `ActiveChanged` (GNOME, freedesktop) | `WM_POWERBROADCAST`, `WM_WTSSESSION_CHANGE` |

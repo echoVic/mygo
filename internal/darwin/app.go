@@ -489,7 +489,7 @@ func (a appController) ClearRecentDocuments() error {
 	return nil
 }
 
-func (appController) SetJumpListTasks([]platform.JumpListTask) error { return nil }
+func (appController) SetJumpList(platform.JumpList) error { return nil }
 
 // WebViewSupported reports whether a window showing a web page can have
 // one. WKWebView is part of macOS, so this holds wherever the app runs.

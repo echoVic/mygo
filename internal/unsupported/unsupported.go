@@ -80,11 +80,14 @@ func (app) SetDockMenu(*platform.Menu)                        {}
 func (app) ClearBrowsingData(done func(error))                { done(errUnsupported) }
 func (app) AddRecentDocument(string) error                    { return errUnsupported }
 func (app) ClearRecentDocuments() error                       { return errUnsupported }
-func (app) SetJumpListTasks([]platform.JumpListTask) error    { return errUnsupported }
+func (app) SetJumpList(platform.JumpList) error               { return errUnsupported }
 
-func (app) ListCookies(done func([]platform.Cookie, error))     { done(nil, platform.ErrUnsupported) }
+func (app) ListCookies(_ string, done func([]platform.Cookie, error)) {
+	done(nil, platform.ErrUnsupported)
+}
 func (app) SetCookie(_ platform.Cookie, done func(error))       { done(platform.ErrUnsupported) }
 func (app) DeleteCookie(_ platform.CookieKey, done func(error)) { done(platform.ErrUnsupported) }
+func (app) ClearCookies(done func(error))                       { done(platform.ErrUnsupported) }
 
 type dialogs struct{}
 

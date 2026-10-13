@@ -310,7 +310,19 @@ func (w *window) setUp(controller uintptr) {
 		w.focusWebView()
 	}
 
+	if !w.b.holdForCookies(w) {
+		w.becomeReady()
+	}
+}
+
+// becomeReady runs the calls that waited for the web view, its first
+// navigation among them.
+func (w *window) becomeReady() {
+	if w.closed {
+		return
+	}
 	w.ready = true
+	w.b.closeCookieView()
 	pending := w.pending
 	w.pending = nil
 	for i, c := range pending {
