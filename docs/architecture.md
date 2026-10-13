@@ -1972,6 +1972,12 @@ either.
   cannot. `ui.Shape` lays out text without the cache of layouts, for widgets
   that keep their glyphs, and `Painter.Glyphs` draws them where they
   placed them.
+  A text input's `OnTextKey` gets the keys that type no text as they
+  come too, after `HandleInput`, but first applies the input queued for
+  the editor (`widgetTextInput.prepare`, as the platform's queries do),
+  so that fn reads the text typed before the key; a key it takes is
+  taken as `HandleInput`'s are. Shortcuts around the focus claim keys
+  first unless the editor wants them (`editor.wants`), as Enter.
   `HandleTextInput` connects a custom element's application-owned
   `TextInputClient` to the same platform services. A stable, focus-checked
   adapter supplies absolute UTF-16 text ranges, selection, marked text,

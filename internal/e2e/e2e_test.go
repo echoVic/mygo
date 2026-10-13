@@ -2910,6 +2910,56 @@ func TestContentWindowComposingKeys(t *testing.T) {
 	eventually(t, "Escape closing the dialog", func() bool { o, _, _ := state(); return !o })
 }
 
+// TestContentWindowTextKeys has a composer's OnTextKey take Return and
+// Tab as the platform delivers them, reading the text typed before them:
+// the text area inserts no newline, and the focus stays.
+func TestContentWindowTextKeys(t *testing.T) {
+	var frames atomic.Int32
+	draft, other := "", ""
+	var sent []string
+	tabs := 0
+	view := func(c *ui.Context) {
+		frames.Add(1)
+		ui.Column(c).Children(func() {
+			ui.TextArea(c, &draft).AutoFocus().OnTextKey(func(k ui.TextKey) bool {
+				switch {
+				case k.Key == ui.KeyEnter && k.Mods == 0:
+					sent = append(sent, k.Text())
+					k.SetText("")
+					return true
+				case k.Key == ui.KeyTab && k.Mods == 0:
+					tabs++
+					return true
+				}
+				return false
+			})
+			ui.TextInput(c, &other)
+		})
+	}
+	state := func() (d, o string, s []string, n int) {
+		mygo.RunOnMain(func() { d, o, s, n = draft, other, slices.Clone(sent), tabs })
+		return
+	}
+	w := newWindow(t, mygo.WindowOptions{Title: "Text keys", Width: 400, Height: 300, Content: ui.View(view)})
+	eventually(t, "a frame", func() bool { return frames.Load() > 1 })
+	if !compose(w, "hello", 0, true) {
+		t.Skip("key automation not available on this platform")
+	}
+	if !pressKey(w, 36, "\r") { // Return
+		t.Skip("key automation not available on this platform")
+	}
+	eventually(t, "Return sending the draft", func() bool { _, _, s, _ := state(); return len(s) == 1 })
+	if d, _, s, _ := state(); s[0] != "hello" || d != "" {
+		t.Fatalf("sent %q, the draft %q", s, d)
+	}
+	pressTab(w, false)
+	compose(w, "x", 0, true)
+	eventually(t, "the text typed after Tab", func() bool { d, _, _, _ := state(); return d == "x" })
+	if _, o, _, n := state(); n != 1 || o != "" {
+		t.Fatalf("Tab taken %d times, the other input %q", n, o)
+	}
+}
+
 // TestContentWindow shows native UI: frames, input from the platform,
 // Update, capture, and page methods that fail.
 func TestContentWindow(t *testing.T) {
