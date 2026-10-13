@@ -17,7 +17,13 @@ import (
 )
 
 // ErrUnsupported is returned by features the current backend cannot provide.
-var ErrUnsupported = errors.New("not supported on this platform")
+// It is errors.ErrUnsupported too (errors.Is), which apps check.
+var ErrUnsupported error = unsupportedError{}
+
+type unsupportedError struct{}
+
+func (unsupportedError) Error() string        { return "not supported on this platform" }
+func (unsupportedError) Is(target error) bool { return target == errors.ErrUnsupported }
 
 // ErrNotificationsDenied is what ShowNotification fails with when the user
 // does not allow the app to show notifications.
