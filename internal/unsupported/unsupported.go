@@ -123,6 +123,10 @@ func (dialogs) ShowMessageBox(_ platform.Window, _ *platform.MessageBoxOptions, 
 
 type clipboard struct{}
 
+func (clipboard) WatchChanges(func()) (func(), error) {
+	return nil, platform.ErrUnsupported
+}
+
 func (clipboard) ReadData([]transfer.Format) (transfer.Data, error) {
 	return transfer.Data{}, errUnsupported
 }

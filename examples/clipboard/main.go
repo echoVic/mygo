@@ -18,10 +18,10 @@ const noteFormat transfer.Format = "application/vnd.mygo.clipboard-note+json"
 
 type note struct{ Title, Body string }
 type demo struct {
-	note                note
-	path, status        string
-	providers, releases int
-	win                 *mygo.Window
+	note                         note
+	path, status                 string
+	providers, releases, changes int
+	win                          *mygo.Window
 }
 
 func (d *demo) data() transfer.Data {
@@ -113,6 +113,7 @@ func (d *demo) view(c *ui.Context) {
 			}
 		})
 		ui.Text(c, fmt.Sprintf("JSON requests: %d · Clipboard releases: %d", d.providers, d.releases)).TextColor(t.TextMuted)
+		ui.Text(c, fmt.Sprintf("Clipboard changes observed: %d", d.changes)).TextColor(t.TextMuted)
 		ui.Text(c, d.status).Wrap()
 	})
 }
@@ -121,6 +122,15 @@ func main() {
 	d := &demo{note: note{Title: "A portable note", Body: "Shared clipboard and drag representations."}}
 	mygo.App.WhenReady(func() {
 		d.win = mygo.NewWindow(mygo.WindowOptions{Title: "MyGo Clipboard", Width: 640, Height: 580, Content: ui.View(d.view)})
+		off, err := mygo.Clipboard.OnChanged(func() {
+			d.changes++ // observing changes does not request the note's JSON
+			d.win.Invalidate()
+		})
+		if err != nil {
+			d.status = "Clipboard observation unavailable: " + err.Error()
+		} else {
+			d.win.OnClosed(off)
+		}
 	})
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)
