@@ -19,6 +19,9 @@ framework safely. Read it before changing anything under `internal/`.
   timer (`TestSettledWindowSleeps`): the display link pauses, Go's
   scheduler sleeps, and the counter example idles at about 0.005% of a
   core on macOS (an AppKit window, 0.002%) and wakes no thread under X11.
+  The one exception is opt-in: while an app observes the clipboard on
+  macOS, which tells no one of changes, a timer reads the pasteboard's
+  change count every 250 ms (`Clipboard.OnChanged`).
 - **No cgo.** Everything builds with `CGO_ENABLED=0`, so any platform can be
   cross-compiled from any machine. Native APIs are called at run time through
   [purego](https://github.com/ebitengine/purego) (`dlopen` + assembly
@@ -1713,6 +1716,17 @@ clipboard lock. Callback signatures are allocated once and routed by native
 object or user data. Native reads copy bytes so application data outlives
 native handles. See [Clipboard and drag data](data-transfer.md) for API and
 format mappings.
+
+`Clipboard.OnChanged` shares one backend watch across listeners. The core
+coalesces notifications and defers callbacks until clipboard operations and
+other change callbacks unwind; removing the last listener stops the watch,
+and so does quitting. Only apps that observe the clipboard link the watch:
+the first `OnChanged` hooks it into the clipboard's operations and
+`App.OnQuit`.
+Windows uses its hidden app window for `WM_CLIPBOARDUPDATE`, GTK reuses its
+owner-change signal, and macOS installs an NSTimer only while subscribed.
+Observation never reads clipboard types or providers. Browser and unsupported
+backends reject it.
 
 ## Audio (`audio`)
 

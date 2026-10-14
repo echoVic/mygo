@@ -48,9 +48,14 @@ type Backend struct {
 	// ClipboardDuringFlush simulates a toolkit pumping a nested event loop
 	// after releasing providers but before its storage operation returns.
 	ClipboardDuringFlush func()
-	theme                string
-	prefs                platform.Preferences
-	prefsReads           int
+	// ClipboardWatchError injects a failure to start observing changes.
+	ClipboardWatchError error
+	// ClipboardWatchStarts and ClipboardWatchStops count native watches.
+	ClipboardWatchStarts, ClipboardWatchStops int
+	clipboardChanged                          func()
+	theme                                     string
+	prefs                                     platform.Preferences
+	prefsReads                                int
 	// languages and region are the user's (SetSystemLanguages,
 	// SetSystemRegion); en-US without them.
 	languages []string
@@ -920,6 +925,26 @@ func (d dialogs) ShowMessageBox(_ platform.Window, o *platform.MessageBoxOptions
 
 type clipboard struct{ b *Backend }
 
+func (c clipboard) WatchChanges(changed func()) (func(), error) {
+	if c.b.ClipboardWatchError != nil {
+		return nil, c.b.ClipboardWatchError
+	}
+	c.b.ClipboardWatchStarts++
+	c.b.clipboardChanged = changed
+	return func() {
+		c.b.ClipboardWatchStops++
+		c.b.clipboardChanged = nil
+	}, nil
+}
+
+// EmitClipboardChange simulates a native change without reading clipboard
+// providers. Like native callbacks, it must run on the main thread.
+func (b *Backend) EmitClipboardChange() {
+	if b.clipboardChanged != nil {
+		b.clipboardChanged()
+	}
+}
+
 func (c clipboard) ReadText() string   { b, _ := c.b.clipboard.Read(transfer.Text); return string(b) }
 func (c clipboard) WriteText(s string) { _ = c.WriteData(transfer.TextData(s), nil) }
 func (c clipboard) ReadHTML() string   { b, _ := c.b.clipboard.Read(transfer.HTML); return string(b) }
@@ -960,6 +985,7 @@ func (c clipboard) WriteData(d transfer.Data, released func()) error {
 	if len(d.Formats()) == 0 {
 		c.release()
 	}
+	c.b.EmitClipboardChange()
 	return nil
 }
 func (c clipboard) release() {

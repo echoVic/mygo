@@ -381,6 +381,10 @@ func (dialogs) ShowMessageBox(_ platform.Window, o *platform.MessageBoxOptions, 
 // gives the surface its text (surface.paste).
 type clipboard struct{ b *Backend }
 
+func (clipboard) WatchChanges(func()) (func(), error) {
+	return nil, platform.ErrUnsupported
+}
+
 func (c clipboard) ReadText() string {
 	c.b.mu.Lock()
 	defer c.b.mu.Unlock()
