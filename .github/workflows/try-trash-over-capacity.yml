@@ -1,0 +1,32 @@
+name: Try trash over capacity
+
+on:
+  push:
+    branches: [try-trash-over-capacity]
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Windows, os: windows-latest }
+          - { name: Windows ARM64, os: windows-11-arm }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      # First, in a process of its own, before any test recycles anything.
+      - name: The recycle bin as the runner has it
+        if: hashFiles('internal/windows/trash_diag_test.go') != ''
+        run: go test -count=1 -v -run '^TestRecycleBinDiagnostics$' ./internal/windows
+      - name: TrashItem
+        if: always()
+        run: go test -count=1 -v -run 'Trash|Recycle' -skip '^TestRecycleBinDiagnostics$' ./internal/windows
+      - name: The rest of the package
+        if: always()
+        run: go test -count=1 -skip '^TestRecycleBinDiagnostics$' ./internal/windows
