@@ -157,27 +157,36 @@ const (
 // thread with it, or with an error. A runtime that fails to create one with
 // the options is asked for one without them.
 func createEnvironment(userData, language string, done func(env uintptr, err error)) error {
-	err := createEnvironmentWith(userData, language, func(env uintptr, err error) {
-		if err != nil && language != "" {
+	// An official loader next to the executable wins, and reads WebView2's
+	// environment variables itself; the runtime's client library does not.
+	loader := loaderProc()
+	var args string
+	if loader == nil {
+		userData, args = loaderVariables(os.Getenv, executableDir, userData)
+	}
+	withOptions := language != "" || args != ""
+	err := createEnvironmentWith(loader, userData, language, args, func(env uintptr, err error) {
+		if err != nil && withOptions {
 			// A runtime that takes no options of ours: one without them,
-			// in the language of the system.
-			log.Printf("%v; creating it again without its language", err)
-			if err := createEnvironmentWith(userData, "", done); err != nil {
+			// in the language of the system and without the arguments.
+			log.Printf("%v; creating it again without its options", err)
+			if err := createEnvironmentWith(loader, userData, "", "", done); err != nil {
 				done(0, err)
 			}
 			return
 		}
 		done(env, err)
 	})
-	if err != nil && language != "" {
-		return createEnvironmentWith(userData, "", done)
+	if err != nil && withOptions {
+		return createEnvironmentWith(loader, userData, "", "", done)
 	}
 	return err
 }
 
 // createEnvironmentWith creates the environment as createEnvironment does,
-// with the options of language, or none for "".
-func createEnvironmentWith(userData, language string, done func(env uintptr, err error)) error {
+// through loader, or the runtime's client library for nil, with the options
+// of language and args, or none when both are "".
+func createEnvironmentWith(loader *syscall.LazyProc, userData, language, args string, done func(env uintptr, err error)) error {
 	completed := func(hr, env uintptr) {
 		if failed(hr) || env == 0 {
 			done(0, hresultError("creating the WebView2 environment", hr))
@@ -188,15 +197,15 @@ func createEnvironmentWith(userData, language string, done func(env uintptr, err
 	}
 	dataDir := u16(userData)
 	var options uintptr
-	if language != "" {
-		options = newEnvOptions(language)
+	if language != "" || args != "" {
+		options = newEnvOptions(language, args)
 		defer release(options) // the environment takes its own reference
 	}
 
 	// An official loader next to the executable wins.
-	if proc := loaderProc(); proc != nil {
+	if loader != nil {
 		hr := withHandler(completed, func(h uintptr) uintptr {
-			r, _, _ := proc.Call(0, uintptr(unsafe.Pointer(dataDir)), options, h)
+			r, _, _ := loader.Call(0, uintptr(unsafe.Pointer(dataDir)), options, h)
 			return r
 		})
 		if failed(hr) {
@@ -229,6 +238,34 @@ func createEnvironmentWith(userData, language string, done func(env uintptr, err
 		return hresultError("creating the WebView2 environment", hr)
 	}
 	return nil
+}
+
+// loaderVariables returns the user data folder and the browser arguments
+// that Microsoft's loader takes from WebView2's environment variables and
+// the runtime's client library does not, so that MyGo applies them when it
+// loads the runtime itself: WEBVIEW2_USER_DATA_FOLDER replaces userData,
+// relative to the directory exeDir returns, and
+// WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS are appended to the arguments of the
+// options, of which MyGo has none.
+func loaderVariables(getenv func(string) string, exeDir func() string, userData string) (dir, args string) {
+	dir = getenv("WEBVIEW2_USER_DATA_FOLDER")
+	switch {
+	case dir == "":
+		dir = userData
+	case !filepath.IsAbs(dir):
+		dir = filepath.Join(exeDir(), dir)
+	}
+	return dir, getenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS")
+}
+
+// executableDir returns the directory of the executable, which a relative
+// WEBVIEW2_USER_DATA_FOLDER is relative to, or "" when it is unknown.
+func executableDir() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return filepath.Dir(exe)
 }
 
 // loaderProc returns the official WebView2 loader next to the executable and
