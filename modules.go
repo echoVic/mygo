@@ -52,6 +52,8 @@ func (ShellModule) ShowItemInFolder(path string) {
 // and leaves the item where it is, when the item cannot go to the trash
 // and would be deleted permanently instead: on Windows one too big for the
 // recycle bin, or on a drive without one, as network shares are.
+// In the rare case Windows deletes it for good all the same, TrashItem
+// fails and says it was deleted.
 func (ShellModule) TrashItem(path string) error {
 	needsApp("Shell.TrashItem")
 	abs, err := filepath.Abs(path)

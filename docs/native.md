@@ -189,11 +189,12 @@ mygo.Shell.TrashItem(path)                     // to the trash
 mygo.Shell.Beep()
 ```
 
-`TrashItem` never deletes for good: when the item cannot go to the trash
-it fails and leaves the item where it is. On Windows that is an item too
-big for the recycle bin, or on a drive without one, as network shares and
-many removable drives are, which Windows would otherwise delete without
-asking.
+`TrashItem` fails and leaves the item where it is when it cannot go to
+the trash. On Windows that is an item too big for the recycle bin, or on
+a drive without one, as network shares and many removable drives are,
+which Windows would otherwise delete without asking. In the rare case
+Windows deletes it for good all the same, `TrashItem` fails and says it
+was deleted.
 
 `FileIcon` returns the icon the file manager shows for a file, a folder
 or an application, as a PNG of the size asked for in pixels: pass the size
