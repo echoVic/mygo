@@ -5,7 +5,7 @@ package windows
 import (
 	"encoding/binary"
 	"fmt"
-	_ "os"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -102,6 +102,11 @@ func initTrashSink() {
 }
 
 func (shell) TrashItem(path string) error {
+	if info, err := os.Lstat(path); err == nil && info.Mode().IsRegular() {
+		if capacity, ok := recycleBinCapacity(path); ok && uint64(info.Size()) > capacity<<20 {
+			return fmt.Errorf("mygo: cannot move %s to the recycle bin: it is larger than the recycle bin (%d MB)", path, capacity)
+		}
+	}
 	trashSinkOnce.Do(initTrashSink)
 	var item uintptr
 	if r, _, _ := procSHCreateItemFromParsingName.Call(uintptr(unsafe.Pointer(u16(path))), 0, uintptr(unsafe.Pointer(&iidIShellItem)), uintptr(unsafe.Pointer(&item))); failed(r) || item == 0 {
