@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sync"
@@ -84,6 +85,12 @@ func TestRecycleBinDiagnostics(t *testing.T) {
 			canRestore = true
 		}
 	}
+	if canRestore {
+		trashDiagChildren(t, dir, mount, key)
+	} else {
+		t.Log("child operations unavailable: registry snapshot failed")
+	}
+	t.Log("in-process diagnostics, with the original registry settings restored:")
 	if !failed(comHR) && canRestore {
 		path := filepath.Join(dir, "first-use.bin")
 		if err := os.WriteFile(path, []byte{1}, 0o600); err != nil {
@@ -142,6 +149,113 @@ func TestRecycleBinDiagnostics(t *testing.T) {
 		t.Logf("create NukeOnDelete control: %v", err)
 	} else {
 		trashDiagOperation(t, path, mount)
+	}
+}
+
+func trashDiagChildren(t *testing.T, dir, mount, key string) {
+	// Each subtest restores its settings before the next group, including
+	// before the original in-process diagnostic's first TrashItem call.
+	t.Run("children-capacity", func(t *testing.T) {
+		if err := trashTestSaveBinSettings(t, key, t.Logf); err != nil {
+			t.Logf("save recycle bin settings for children: %v", err)
+			return
+		}
+		settingsOK := true
+		for name, value := range map[string]uint32{"NukeOnDelete": 0, "MaxCapacity": 1} {
+			if err := trashTestSetDWORD(key, name, value); err != nil {
+				t.Logf("set %s=%d for children: %v", name, value, err)
+				settingsOK = false
+			}
+		}
+		if !settingsOK {
+			t.Log("child capacity cases unavailable: could not set the registry values")
+			return
+		}
+		t.Log("fresh child processes with NukeOnDelete=0, MaxCapacity=1 MiB:")
+		trashDiagDumpValues(t, key)
+		for _, tc := range []struct {
+			name  string
+			files int
+			bytes int
+		}{
+			{"4-MiB-file", 0, 4 << 20},
+			{"1048576-byte-file", 0, 1048576},
+			{"1048575-byte-file", 0, 1048575},
+			{"8-files-of-256-KiB", 8, 256 << 10},
+			{"512-files-of-1025-bytes", 512, 1025},
+			{"768-KiB-file", 0, 768 << 10},
+		} {
+			trashDiagRunPair(t, dir, mount, tc.name, tc.files, tc.bytes)
+		}
+	})
+	t.Run("children-nuke-on-delete", func(t *testing.T) {
+		if err := trashTestSaveBinSettings(t, key, t.Logf); err != nil {
+			t.Logf("save recycle bin settings for children: %v", err)
+			return
+		}
+		// The capacity subtest's cleanup has restored the original
+		// MaxCapacity; change only NukeOnDelete for this control.
+		if err := trashTestSetDWORD(key, "NukeOnDelete", 1); err != nil {
+			t.Logf("set NukeOnDelete=1 for children: %v", err)
+			return
+		}
+		t.Log("fresh child processes with NukeOnDelete=1 and the original MaxCapacity:")
+		trashDiagDumpValues(t, key)
+		trashDiagRunPair(t, dir, mount, "nuke-on-delete", 0, 1)
+	})
+}
+
+func trashDiagRunPair(t *testing.T, dir, mount, name string, files, size int) {
+	for _, mode := range []string{"logging-sink", "TrashItem"} {
+		path := filepath.Join(dir, "child-"+name+"-"+mode)
+		if err := trashDiagMakeItem(path, files, size); err != nil {
+			t.Logf("create child fixture %s: %v", path, err)
+			continue
+		}
+		t.Logf("fresh child: mode=%s path=%q", mode, path)
+		trashDiagBin(t, mount, "before child")
+		cmd := exec.Command(os.Args[0], "-test.run=^TestRecycleBinDiagnosticsChild$", "-test.v")
+		cmd.Env = append(os.Environ(), "MYGO_TEST_RECYCLE_BIN_DIAGNOSTICS_CHILD="+path, "MYGO_TEST_RECYCLE_BIN_DIAGNOSTICS_MODE="+mode)
+		out, err := cmd.CombinedOutput()
+		t.Logf("child mode=%s exit=%v; full output:\n%s", mode, err, out)
+		info, err := os.Stat(path)
+		if err == nil {
+			t.Logf("path after child: exists=true isDir=%t size=%d", info.IsDir(), info.Size())
+		} else if os.IsNotExist(err) {
+			t.Log("path after child: exists=false")
+		} else {
+			t.Logf("path after child: existence unavailable: %v", err)
+		}
+		trashDiagBin(t, mount, "after child")
+	}
+}
+
+func TestRecycleBinDiagnosticsChild(t *testing.T) {
+	path := os.Getenv("MYGO_TEST_RECYCLE_BIN_DIAGNOSTICS_CHILD")
+	if path == "" {
+		t.Skip("only run as a recycle bin diagnostic child")
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	if r, _, _ := procCoInitializeEx.Call(0, coinitApartmentThreaded); failed(r) {
+		t.Log(hresultError("CoInitializeEx", r))
+		return
+	}
+	defer procCoUninitialize.Call()
+	mode := os.Getenv("MYGO_TEST_RECYCLE_BIN_DIAGNOSTICS_MODE")
+	t.Logf("child pid=%d mode=%s path=%q", os.Getpid(), mode, path)
+	switch mode {
+	case "logging-sink":
+		mount, _, _, err := trashTestVolume(path)
+		if err != nil {
+			t.Logf("child volume: %v", err)
+			return
+		}
+		trashDiagOperation(t, path, mount)
+	case "TrashItem":
+		t.Logf("real TrashItem(%s): %v", path, (shell{}).TrashItem(path))
+	default:
+		t.Logf("unknown child mode %q", mode)
 	}
 }
 

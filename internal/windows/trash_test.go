@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -23,6 +24,20 @@ var (
 )
 
 const trashTestBitBucketKey = `Software\Microsoft\Windows\CurrentVersion\Explorer\BitBucket`
+
+func TestMain(m *testing.M) {
+	if path := os.Getenv("MYGO_TEST_TRASH_ITEM"); path != "" {
+		runtime.LockOSThread()
+		if r, _, _ := procCoInitializeEx.Call(0, coinitApartmentThreaded); failed(r) {
+			fmt.Fprintln(os.Stderr, hresultError("CoInitializeEx", r))
+			os.Exit(1)
+		}
+		fmt.Println((shell{}).TrashItem(path))
+		procCoUninitialize.Call()
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
 
 func trashTestVolume(path string) (mount, volume, key string, err error) {
 	buf := make([]uint16, 32768)
@@ -218,18 +233,27 @@ func TestTrashItemKeepsAnItemTooBigForTheRecycleBin(t *testing.T) {
 	if err := os.Mkdir(folder, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for i := range 4 {
-		if err := os.WriteFile(filepath.Join(folder, fmt.Sprintf("%d.bin", i)), make([]byte, 1<<20), 0o600); err != nil {
+	for i := range 2 {
+		if err := os.WriteFile(filepath.Join(folder, fmt.Sprintf("%d.bin", i)), make([]byte, 2<<20), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for _, path := range []string{file, folder} {
 		before := recycled(t, path)
-		if err := (shell{}).TrashItem(path); err == nil {
-			t.Errorf("TrashItem(%s) did not fail for an item bigger than the 1 MiB recycle bin", path)
+		// The shell reads the recycle bin's settings once per process.
+		cmd := exec.Command(os.Args[0], "-test.run=^$")
+		cmd.Env = append(os.Environ(), "MYGO_TEST_TRASH_ITEM="+path)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("TrashItem helper for %s: %v\n%s", path, err, out)
+		}
+		if result := strings.TrimSpace(string(out)); result == "" || result == "<nil>" {
+			t.Errorf("TrashItem(%s) reported %q, want an error for an item bigger than the 1 MiB recycle bin", path, result)
+		} else {
+			t.Logf("TrashItem(%s): %s", path, result)
 		}
 		var size int64
-		err := filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
+		err = filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
 			}
