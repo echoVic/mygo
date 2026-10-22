@@ -1,0 +1,36 @@
+name: Try WebView2 loader variables
+
+on:
+  push:
+    branches: [try-webview2-loader-variables]
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Windows, os: windows-latest }
+          - { name: Windows ARM64, os: windows-11-arm }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Download what the tests need
+        run: go run ./internal/prefetch
+      - name: The environment options and the variables
+        run: go test -count=1 -v -run 'TestEnvOptionsArguments|TestLoaderVariables|TestChromiumLanguage' ./internal/windows
+      - name: A page's DevTools protocol through WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS
+        if: always()
+        env:
+          MYGO_E2E: 1
+        run: go test -count=1 -v -run '^TestWebView2LoaderVariables$' ./internal/e2e
+      - name: Pages as before
+        if: always()
+        env:
+          MYGO_E2E: 1
+        run: go test -count=1 -run '^(TestIPCAndProtocol|TestPageColorScheme)$' ./internal/e2e
