@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -27,7 +28,32 @@ func TestMain(m *testing.M) {
 			fmt.Fprintln(os.Stderr, hresultError("CoInitializeEx", r))
 			os.Exit(1)
 		}
-		fmt.Println((shell{}).TrashItem(path))
+		paths := strings.Split(path, string(os.PathListSeparator))
+		resize := os.Getenv("MYGO_TEST_TRASH_RESIZE")
+		var resizeKey string
+		var resizeCapacity uint32
+		if len(paths) > 1 && resize != "" {
+			capacity, err := strconv.ParseUint(resize, 10, 32)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			key, ok := recycleBinKey(paths[0])
+			if !ok {
+				fmt.Fprintln(os.Stderr, "cannot find the recycle bin key for", paths[0])
+				os.Exit(1)
+			}
+			resizeKey, resizeCapacity = key, uint32(capacity)
+		}
+		for i, path := range paths {
+			fmt.Println((shell{}).TrashItem(path))
+			if i == 0 && resizeKey != "" {
+				if err := setRegistryDWORD(resizeKey, "MaxCapacity", resizeCapacity); err != nil {
+					fmt.Fprintln(os.Stderr, err)
+					os.Exit(1)
+				}
+			}
+		}
 		procCoUninitialize.Call()
 		os.Exit(0)
 	}
@@ -301,5 +327,57 @@ func TestDefaultRecycleBinCapacity(t *testing.T) {
 		if got := defaultRecycleBinCapacity(tc.total); got != tc.want {
 			t.Errorf("defaultRecycleBinCapacity(%d) = %d MiB, want %d", tc.total, got, tc.want)
 		}
+	}
+}
+
+func TestTrashItemFailsWhenWindowsDeletesAFileAllTheSame(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	if r, _, _ := procCoInitializeEx.Call(0, coinitApartmentThreaded); failed(r) {
+		t.Fatal(hresultError("CoInitializeEx", r))
+	}
+	defer procCoUninitialize.Call()
+	dir := t.TempDir()
+	setRecycleBinCapacity(t, dir, 1)
+	small := filepath.Join(dir, "small.bin")
+	if err := os.WriteFile(small, []byte{1}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "file.bin")
+	if err := os.WriteFile(file, make([]byte, 4<<20), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := recycled(t, dir)
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	cmd.Env = append(os.Environ(),
+		"MYGO_TEST_TRASH_ITEM="+strings.Join([]string{small, file}, string(os.PathListSeparator)),
+		"MYGO_TEST_TRASH_RESIZE=1048576")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("TrashItem helper: %v\n%s", err, out)
+	}
+	results := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(results) != 2 || results[0] != "<nil>" {
+		t.Fatalf("TrashItem helper reported %q, want two results with the first <nil>", out)
+	}
+	for _, path := range []string{small, file} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("TrashItem(%s) did not remove the item: %v", path, err)
+		}
+	}
+	after := recycled(t, dir)
+	switch {
+	case strings.Contains(results[1], "Windows deleted it permanently"):
+		if after != before+1 {
+			t.Errorf("the recycle bin went from %d to %d items, want only the small file added", before, after)
+		}
+	case results[1] == "<nil>":
+		if after != before+2 {
+			t.Errorf("TrashItem reported success but the recycle bin went from %d to %d items, want two more", before, after)
+		} else {
+			t.Log("Windows reread the recycle bin's size; the permanent-delete backstop was not exercised")
+		}
+	default:
+		t.Errorf("TrashItem(%s) reported %q, want a permanent-delete error or successful recycling", file, results[1])
 	}
 }
