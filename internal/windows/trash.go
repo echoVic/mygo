@@ -104,7 +104,7 @@ func initTrashSink() {
 		// and no new item, though nothing is deleted yet: the shell then
 		// deletes its items one by one.
 		cb(func(this, flags, item, hrDelete, newlyCreated uintptr) uintptr {
-			if !failed(hrDelete) && newlyCreated == 0 {
+			if !failed(hrDelete) && uint32(hrDelete) != copyEngineSNotHandled && newlyCreated == 0 {
 				trashSinks[this].deleted = true
 			}
 			return sOK
