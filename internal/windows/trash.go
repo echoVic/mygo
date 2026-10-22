@@ -45,6 +45,7 @@ const (
 	fofxRecycleOnDelete        = 0x00080000
 	fofxAddUndoRecord          = 0x20000000
 	tsfDeleteRecycleIfPossible = 0x80
+	copyEngineSNotHandled      = 0x00270003 // COPYENGINE_S_NOT_HANDLED
 	eAbort                     = 0x80004004
 
 	// IFileOperation methods.
@@ -98,9 +99,12 @@ func initTrashSink() {
 			}
 			return sOK
 		}),
-		// PostDeleteItem(flags, item, hrDelete, newlyCreated)
+		// PostDeleteItem(flags, item, hrDelete, newlyCreated). A folder too
+		// big for the recycle bin comes first with COPYENGINE_S_NOT_HANDLED
+		// and no new item, though nothing is deleted yet: the shell then
+		// deletes its items one by one.
 		cb(func(this, flags, item, hrDelete, newlyCreated uintptr) uintptr {
-			if !failed(hrDelete) && newlyCreated == 0 {
+			if !failed(hrDelete) && uint32(hrDelete) != copyEngineSNotHandled && newlyCreated == 0 {
 				trashSinks[this].deleted = true
 			}
 			return sOK
