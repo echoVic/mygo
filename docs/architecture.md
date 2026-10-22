@@ -541,7 +541,9 @@ features GTK 4 lacks become X11-only code beside it.
   or `CO_E_SERVER_EXEC_FAILURE`. When the webview never comes, the calls
   that report a result (Eval, CapturePage, PrintToPDF) get the reason, as
   later ones do: the window closed, or WebView2 could not create it.
-  User data lives in `%LOCALAPPDATA%\<name>\WebView2`.
+  User data lives in `%LOCALAPPDATA%\<name>\WebView2`. The direct path applies
+  `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` and `WEBVIEW2_USER_DATA_FOLDER` as
+  the loader does; it does not read the channel variables or policy keys.
 - **Custom schemes** load from `http://<scheme>.localhost/`, and their
   other hosts from `http://<host>.<scheme>.localhost/` (`internal/schemehost`:
   hosts of DNS labels, lower-cased, without a port), which WebView2
