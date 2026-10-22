@@ -22,9 +22,6 @@ import (
 // folder too big for the recycle bin ends there too: Windows deletes its
 // items one by one, without the flag. A file too big comes with the flag
 // and is deleted all the same, so TrashItem compares its size first.
-// Windows reads the size once per process, so changing it directly in the
-// registry may still let a file be deleted for good. PostDeleteItem then
-// has no new item, and TrashItem fails saying Windows deleted it.
 
 var (
 	clsidFileOperation            = guid("3ad05575-8857-4850-9277-11b85bdb8e09")
@@ -54,14 +51,12 @@ const (
 	foGetAnyOperationsAborted = 22
 )
 
-// A trashSink is an IFileOperationProgressSink: PreDeleteItem refuses the
-// deletes that would not go to the recycle bin, and PostDeleteItem notes
-// one that did not all the same; the other methods succeed.
+// A trashSink is an IFileOperationProgressSink: only PreDeleteItem does
+// anything, the other methods succeed.
 type trashSink struct {
 	vtbl    *[19]uintptr
 	refs    int32
 	refused bool // a delete would not have gone to the recycle bin
-	deleted bool // an item was deleted for good all the same
 }
 
 func initTrashSink() {
@@ -98,13 +93,7 @@ func initTrashSink() {
 			}
 			return sOK
 		}),
-		// PostDeleteItem(flags, item, hrDelete, newlyCreated)
-		cb(func(this, flags, item, hrDelete, newlyCreated uintptr) uintptr {
-			if !failed(hrDelete) && newlyCreated == 0 {
-				trashSinks[this].deleted = true
-			}
-			return sOK
-		}),
+		cb(func(this, a, b, c, d uintptr) uintptr { return sOK }), // PostDeleteItem
 		ok3, // PreNewItem
 		cb(func(this, a, b, c, d, e, f, g uintptr) uintptr { return sOK }), // PostNewItem
 		cb(func(this, total, done uintptr) uintptr { return sOK }),         // UpdateProgress
@@ -147,8 +136,6 @@ func (shell) TrashItem(path string) error {
 	switch {
 	case sink.refused:
 		return fmt.Errorf("mygo: cannot move %s to the recycle bin: it would be deleted permanently", path)
-	case sink.deleted:
-		return fmt.Errorf("mygo: cannot move %s to the recycle bin: Windows deleted it permanently", path)
 	case failed(r):
 		return fmt.Errorf("mygo: cannot move %s to the recycle bin: %w", path, hresultError("IFileOperation.PerformOperations", r))
 	case aborted != 0:

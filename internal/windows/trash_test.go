@@ -339,45 +339,51 @@ func TestTrashItemFailsWhenWindowsDeletesAFileAllTheSame(t *testing.T) {
 	defer procCoUninitialize.Call()
 	dir := t.TempDir()
 	setRecycleBinCapacity(t, dir, 1)
-	small := filepath.Join(dir, "small.bin")
-	if err := os.WriteFile(small, []byte{1}, 0o600); err != nil {
+	folder := filepath.Join(dir, "folder")
+	if err := os.Mkdir(folder, 0o700); err != nil {
 		t.Fatal(err)
+	}
+	for i := range 2 {
+		if err := os.WriteFile(filepath.Join(folder, fmt.Sprintf("%d.bin", i)), make([]byte, 2<<20), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	file := filepath.Join(dir, "file.bin")
 	if err := os.WriteFile(file, make([]byte, 4<<20), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	before := recycled(t, dir)
+	// The helper's shell reads the size of 1 MB refusing the folder, which
+	// puts nothing in the recycle bin: Windows may empty a recycle bin that
+	// holds more than its size. The size then grows behind the shell's back,
+	// so the file passes TrashItem's check and the shell deletes it.
 	cmd := exec.Command(os.Args[0], "-test.run=^$")
 	cmd.Env = append(os.Environ(),
-		"MYGO_TEST_TRASH_ITEM="+strings.Join([]string{small, file}, string(os.PathListSeparator)),
+		"MYGO_TEST_TRASH_ITEM="+folder+string(os.PathListSeparator)+file,
 		"MYGO_TEST_TRASH_RESIZE=1048576")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("TrashItem helper: %v\n%s", err, out)
 	}
 	results := strings.Split(strings.TrimSpace(string(out)), "\n")
-	if len(results) != 2 || results[0] != "<nil>" {
-		t.Fatalf("TrashItem helper reported %q, want two results with the first <nil>", out)
+	if len(results) != 2 {
+		t.Fatalf("TrashItem helper reported %q, want two results", out)
 	}
-	for _, path := range []string{small, file} {
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Errorf("TrashItem(%s) did not remove the item: %v", path, err)
-		}
+	if !strings.Contains(results[0], "would be deleted permanently") {
+		t.Errorf("TrashItem(%s) reported %q, want a refusal", folder, results[0])
 	}
-	after := recycled(t, dir)
-	switch {
-	case strings.Contains(results[1], "Windows deleted it permanently"):
-		if after != before+1 {
-			t.Errorf("the recycle bin went from %d to %d items, want only the small file added", before, after)
+	var size int64
+	if err := filepath.Walk(folder, func(_ string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() {
+			size += info.Size()
 		}
-	case results[1] == "<nil>":
-		if after != before+2 {
-			t.Errorf("TrashItem reported success but the recycle bin went from %d to %d items, want two more", before, after)
-		} else {
-			t.Log("Windows reread the recycle bin's size; the permanent-delete backstop was not exercised")
-		}
-	default:
-		t.Errorf("TrashItem(%s) reported %q, want a permanent-delete error or successful recycling", file, results[1])
+		return err
+	}); err != nil || size != 4<<20 {
+		t.Errorf("TrashItem(%s) left %d bytes (%v), want %d", folder, size, err, 4<<20)
+	}
+	if !strings.Contains(results[1], "Windows deleted it permanently") {
+		t.Errorf("TrashItem(%s) reported %q, want an error saying Windows deleted it", file, results[1])
+	}
+	if _, err := os.Stat(file); !os.IsNotExist(err) {
+		t.Errorf("TrashItem(%s) kept the file (%v), so the shell did not delete it", file, err)
 	}
 }
