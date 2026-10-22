@@ -3,15 +3,128 @@
 package windows
 
 import (
+	"encoding/binary"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"unsafe"
 )
 
 var procSHQueryRecycleBinW = shell32.NewProc("SHQueryRecycleBinW")
+
+// Keep capacity-test helpers distinct from any future production helpers.
+var (
+	trashTestGetVolumePathNameW                = kernel32.NewProc("GetVolumePathNameW")
+	trashTestGetVolumeNameForVolumeMountPointW = kernel32.NewProc("GetVolumeNameForVolumeMountPointW")
+)
+
+const trashTestBitBucketKey = `Software\Microsoft\Windows\CurrentVersion\Explorer\BitBucket`
+
+func trashTestVolume(path string) (mount, volume, key string, err error) {
+	buf := make([]uint16, 32768)
+	if r, _, e := trashTestGetVolumePathNameW.Call(uintptr(unsafe.Pointer(u16(path))), uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf))); r == 0 {
+		return "", "", "", fmt.Errorf("GetVolumePathName(%s): %w", path, e)
+	}
+	mount = syscall.UTF16ToString(buf)
+	if r, _, e := trashTestGetVolumeNameForVolumeMountPointW.Call(uintptr(unsafe.Pointer(u16(mount))), uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf))); r == 0 {
+		return mount, "", "", fmt.Errorf("GetVolumeNameForVolumeMountPoint(%s): %w", mount, e)
+	}
+	volume = syscall.UTF16ToString(buf)
+	if !strings.HasPrefix(volume, `\\?\Volume{`) || !strings.HasSuffix(volume, `}\`) {
+		return mount, volume, "", fmt.Errorf("unexpected volume name %q", volume)
+	}
+	key = trashTestBitBucketKey + `\Volume\` + strings.TrimSuffix(strings.TrimPrefix(volume, `\\?\Volume`), `\`)
+	return mount, volume, key, nil
+}
+
+// trashTestSaveBinSettings registers restoration before the caller writes
+// anything. Preserve the types and raw data too, even for non-DWORD values.
+func trashTestSaveBinSettings(t *testing.T, path string, reportf func(string, ...any)) error {
+	t.Helper()
+	var key uintptr
+	r, _, _ := procRegOpenKeyExW.Call(hkeyCurrentUser, uintptr(unsafe.Pointer(u16(path))), 0, keyQueryValue, uintptr(unsafe.Pointer(&key)))
+	missing := syscall.Errno(r) == syscall.ERROR_FILE_NOT_FOUND || syscall.Errno(r) == syscall.ERROR_PATH_NOT_FOUND
+	if r != 0 && !missing {
+		return fmt.Errorf("RegOpenKeyEx(%s): %w", path, syscall.Errno(r))
+	}
+	if !missing {
+		defer procRegCloseKey.Call(key)
+	}
+	values := []struct {
+		name   string
+		kind   uint32
+		data   []byte
+		exists bool
+	}{{name: "NukeOnDelete"}, {name: "MaxCapacity"}}
+	if !missing {
+		for i := range values {
+			v := &values[i]
+			var size uint32
+			r, _, _ := procRegQueryValueExW.Call(key, uintptr(unsafe.Pointer(u16(v.name))), 0, uintptr(unsafe.Pointer(&v.kind)), 0, uintptr(unsafe.Pointer(&size)))
+			if syscall.Errno(r) == syscall.ERROR_FILE_NOT_FOUND {
+				continue
+			}
+			if r != 0 {
+				return fmt.Errorf("RegQueryValueEx(%s): %w", v.name, syscall.Errno(r))
+			}
+			v.exists = true
+			v.data = make([]byte, size)
+			if size > 0 {
+				r, _, _ = procRegQueryValueExW.Call(key, uintptr(unsafe.Pointer(u16(v.name))), 0, uintptr(unsafe.Pointer(&v.kind)), uintptr(unsafe.Pointer(&v.data[0])), uintptr(unsafe.Pointer(&size)))
+				if r != 0 {
+					return fmt.Errorf("RegQueryValueEx(%s): %w", v.name, syscall.Errno(r))
+				}
+				v.data = v.data[:size]
+			}
+		}
+	}
+	t.Cleanup(func() {
+		if missing {
+			if err := regDeleteTree(hkeyCurrentUser, path); err != nil {
+				reportf("restore missing recycle bin key: %v", err)
+			}
+			return
+		}
+		for _, v := range values {
+			var err error
+			if v.exists {
+				err = trashTestWriteValue(path, v.name, v.kind, v.data)
+			} else {
+				err = regDeleteValue(hkeyCurrentUser, path, v.name)
+			}
+			if err != nil {
+				reportf("restore recycle bin value %s: %v", v.name, err)
+			}
+		}
+	})
+	return nil
+}
+
+func trashTestWriteValue(path, name string, kind uint32, data []byte) error {
+	var key uintptr
+	if r, _, _ := procRegCreateKeyExW.Call(hkeyCurrentUser, uintptr(unsafe.Pointer(u16(path))), 0, 0, 0, keySetValue, 0, uintptr(unsafe.Pointer(&key)), 0); r != 0 {
+		return fmt.Errorf("RegCreateKeyEx(%s): %w", path, syscall.Errno(r))
+	}
+	defer procRegCloseKey.Call(key)
+	var p *byte
+	if len(data) > 0 {
+		p = &data[0]
+	}
+	if r, _, _ := procRegSetValueExW.Call(key, uintptr(unsafe.Pointer(u16(name))), 0, uintptr(kind), uintptr(unsafe.Pointer(p)), uintptr(len(data))); r != 0 {
+		return fmt.Errorf("RegSetValueEx(%s): %w", name, syscall.Errno(r))
+	}
+	return nil
+}
+
+func trashTestSetDWORD(path, name string, value uint32) error {
+	var data [4]byte
+	binary.LittleEndian.PutUint32(data[:], value)
+	return trashTestWriteValue(path, name, 4 /* REG_DWORD */, data[:])
+}
 
 // recycled returns how many items the recycle bin of path's drive holds.
 func recycled(t *testing.T, path string) int64 {
@@ -73,5 +186,65 @@ func TestTrashItem(t *testing.T) {
 	}
 	if _, err := os.Stat(kept); err != nil {
 		t.Errorf("TrashItem(%s) deleted the file: %v", unc, err)
+	}
+}
+
+func TestTrashItemKeepsAnItemTooBigForTheRecycleBin(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	if r, _, _ := procCoInitializeEx.Call(0, coinitApartmentThreaded); failed(r) {
+		t.Fatal(hresultError("CoInitializeEx", r))
+	}
+	defer procCoUninitialize.Call()
+	dir := t.TempDir()
+	_, _, key, err := trashTestVolume(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := trashTestSaveBinSettings(t, key, t.Errorf); err != nil {
+		t.Fatal(err)
+	}
+	for name, value := range map[string]uint32{"NukeOnDelete": 0, "MaxCapacity": 1} {
+		if err := trashTestSetDWORD(key, name, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	file := filepath.Join(dir, "file.bin")
+	if err := os.WriteFile(file, make([]byte, 4<<20), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	folder := filepath.Join(dir, "folder")
+	if err := os.Mkdir(folder, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 4 {
+		if err := os.WriteFile(filepath.Join(folder, fmt.Sprintf("%d.bin", i)), make([]byte, 1<<20), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, path := range []string{file, folder} {
+		before := recycled(t, path)
+		if err := (shell{}).TrashItem(path); err == nil {
+			t.Errorf("TrashItem(%s) did not fail for an item bigger than the 1 MiB recycle bin", path)
+		}
+		var size int64
+		err := filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if !info.IsDir() {
+				size += info.Size()
+			}
+			return nil
+		})
+		if err != nil {
+			t.Errorf("TrashItem(%s) did not keep the item at its path: %v", path, err)
+		} else if size != 4<<20 {
+			t.Errorf("TrashItem(%s) left %d bytes, want %d", path, size, 4<<20)
+		}
+		if after := recycled(t, path); after != before {
+			t.Errorf("TrashItem(%s): the recycle bin went from %d to %d items, want unchanged", path, before, after)
+		}
 	}
 }
