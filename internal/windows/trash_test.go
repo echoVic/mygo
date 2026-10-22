@@ -17,16 +17,11 @@ import (
 
 var procSHQueryRecycleBinW = shell32.NewProc("SHQueryRecycleBinW")
 
-// Keep capacity-test helpers distinct from any future production helpers.
-var (
-	trashTestGetVolumePathNameW                = kernel32.NewProc("GetVolumePathNameW")
-	trashTestGetVolumeNameForVolumeMountPointW = kernel32.NewProc("GetVolumeNameForVolumeMountPointW")
-)
-
-const trashTestBitBucketKey = `Software\Microsoft\Windows\CurrentVersion\Explorer\BitBucket`
-
 func TestMain(m *testing.M) {
 	if path := os.Getenv("MYGO_TEST_TRASH_ITEM"); path != "" {
+		// Helper process for the tests of the recycle bin's size: the
+		// shell reads its settings once per process, so TrashItem runs in
+		// one started after the test has written them.
 		runtime.LockOSThread()
 		if r, _, _ := procCoInitializeEx.Call(0, coinitApartmentThreaded); failed(r) {
 			fmt.Fprintln(os.Stderr, hresultError("CoInitializeEx", r))
@@ -39,26 +34,9 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func trashTestVolume(path string) (mount, volume, key string, err error) {
-	buf := make([]uint16, 32768)
-	if r, _, e := trashTestGetVolumePathNameW.Call(uintptr(unsafe.Pointer(u16(path))), uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf))); r == 0 {
-		return "", "", "", fmt.Errorf("GetVolumePathName(%s): %w", path, e)
-	}
-	mount = syscall.UTF16ToString(buf)
-	if r, _, e := trashTestGetVolumeNameForVolumeMountPointW.Call(uintptr(unsafe.Pointer(u16(mount))), uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf))); r == 0 {
-		return mount, "", "", fmt.Errorf("GetVolumeNameForVolumeMountPoint(%s): %w", mount, e)
-	}
-	volume = syscall.UTF16ToString(buf)
-	if !strings.HasPrefix(volume, `\\?\Volume{`) || !strings.HasSuffix(volume, `}\`) {
-		return mount, volume, "", fmt.Errorf("unexpected volume name %q", volume)
-	}
-	key = trashTestBitBucketKey + `\Volume\` + strings.TrimSuffix(strings.TrimPrefix(volume, `\\?\Volume`), `\`)
-	return mount, volume, key, nil
-}
-
-// trashTestSaveBinSettings registers restoration before the caller writes
+// saveRecycleBinSettings registers restoration before the caller writes
 // anything. Preserve the types and raw data too, even for non-DWORD values.
-func trashTestSaveBinSettings(t *testing.T, path string, reportf func(string, ...any)) error {
+func saveRecycleBinSettings(t *testing.T, path string) error {
 	t.Helper()
 	var key uintptr
 	r, _, _ := procRegOpenKeyExW.Call(hkeyCurrentUser, uintptr(unsafe.Pointer(u16(path))), 0, keyQueryValue, uintptr(unsafe.Pointer(&key)))
@@ -70,10 +48,9 @@ func trashTestSaveBinSettings(t *testing.T, path string, reportf func(string, ..
 		defer procRegCloseKey.Call(key)
 	}
 	values := []struct {
-		name   string
-		kind   uint32
-		data   []byte
-		exists bool
+		name string
+		kind uint32
+		data []byte
 	}{{name: "NukeOnDelete"}, {name: "MaxCapacity"}}
 	if !missing {
 		for i := range values {
@@ -86,7 +63,6 @@ func trashTestSaveBinSettings(t *testing.T, path string, reportf func(string, ..
 			if r != 0 {
 				return fmt.Errorf("RegQueryValueEx(%s): %w", v.name, syscall.Errno(r))
 			}
-			v.exists = true
 			v.data = make([]byte, size)
 			if size > 0 {
 				r, _, _ = procRegQueryValueExW.Call(key, uintptr(unsafe.Pointer(u16(v.name))), 0, uintptr(unsafe.Pointer(&v.kind)), uintptr(unsafe.Pointer(&v.data[0])), uintptr(unsafe.Pointer(&size)))
@@ -100,26 +76,26 @@ func trashTestSaveBinSettings(t *testing.T, path string, reportf func(string, ..
 	t.Cleanup(func() {
 		if missing {
 			if err := regDeleteTree(hkeyCurrentUser, path); err != nil {
-				reportf("restore missing recycle bin key: %v", err)
+				t.Errorf("restore missing recycle bin key: %v", err)
 			}
 			return
 		}
 		for _, v := range values {
 			var err error
-			if v.exists {
-				err = trashTestWriteValue(path, v.name, v.kind, v.data)
+			if v.data != nil {
+				err = writeRegistryValue(path, v.name, v.kind, v.data)
 			} else {
 				err = regDeleteValue(hkeyCurrentUser, path, v.name)
 			}
 			if err != nil {
-				reportf("restore recycle bin value %s: %v", v.name, err)
+				t.Errorf("restore recycle bin value %s: %v", v.name, err)
 			}
 		}
 	})
 	return nil
 }
 
-func trashTestWriteValue(path, name string, kind uint32, data []byte) error {
+func writeRegistryValue(path, name string, kind uint32, data []byte) error {
 	var key uintptr
 	if r, _, _ := procRegCreateKeyExW.Call(hkeyCurrentUser, uintptr(unsafe.Pointer(u16(path))), 0, 0, 0, keySetValue, 0, uintptr(unsafe.Pointer(&key)), 0); r != 0 {
 		return fmt.Errorf("RegCreateKeyEx(%s): %w", path, syscall.Errno(r))
@@ -135,10 +111,41 @@ func trashTestWriteValue(path, name string, kind uint32, data []byte) error {
 	return nil
 }
 
-func trashTestSetDWORD(path, name string, value uint32) error {
+func setRegistryDWORD(path, name string, value uint32) error {
 	var data [4]byte
 	binary.LittleEndian.PutUint32(data[:], value)
-	return trashTestWriteValue(path, name, 4 /* REG_DWORD */, data[:])
+	return writeRegistryValue(path, name, 4 /* REG_DWORD */, data[:])
+}
+
+// setRecycleBinCapacity sizes the recycle bin of path's volume, in MB, until
+// the test ends.
+func setRecycleBinCapacity(t *testing.T, path string, capacity uint32) {
+	t.Helper()
+	key, ok := recycleBinKey(path)
+	if !ok {
+		t.Fatalf("cannot find the recycle bin key for %s", path)
+	}
+	if err := saveRecycleBinSettings(t, key); err != nil {
+		t.Fatal(err)
+	}
+	for name, value := range map[string]uint32{"NukeOnDelete": 0, "MaxCapacity": capacity} {
+		if err := setRegistryDWORD(key, name, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// trashItemInHelper runs TrashItem in a helper process (see TestMain) and
+// returns what it printed: its error, or <nil>.
+func trashItemInHelper(t *testing.T, path string) string {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	cmd.Env = append(os.Environ(), "MYGO_TEST_TRASH_ITEM="+path)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("TrashItem helper for %s: %v\n%s", path, err, out)
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // recycled returns how many items the recycle bin of path's drive holds.
@@ -212,18 +219,7 @@ func TestTrashItemKeepsAnItemTooBigForTheRecycleBin(t *testing.T) {
 	}
 	defer procCoUninitialize.Call()
 	dir := t.TempDir()
-	_, _, key, err := trashTestVolume(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := trashTestSaveBinSettings(t, key, t.Errorf); err != nil {
-		t.Fatal(err)
-	}
-	for name, value := range map[string]uint32{"NukeOnDelete": 0, "MaxCapacity": 1} {
-		if err := trashTestSetDWORD(key, name, value); err != nil {
-			t.Fatal(err)
-		}
-	}
+	setRecycleBinCapacity(t, dir, 1)
 
 	file := filepath.Join(dir, "file.bin")
 	if err := os.WriteFile(file, make([]byte, 4<<20), 0o600); err != nil {
@@ -240,20 +236,13 @@ func TestTrashItemKeepsAnItemTooBigForTheRecycleBin(t *testing.T) {
 	}
 	for _, path := range []string{file, folder} {
 		before := recycled(t, path)
-		// The shell reads the recycle bin's settings once per process.
-		cmd := exec.Command(os.Args[0], "-test.run=^$")
-		cmd.Env = append(os.Environ(), "MYGO_TEST_TRASH_ITEM="+path)
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("TrashItem helper for %s: %v\n%s", path, err, out)
-		}
-		if result := strings.TrimSpace(string(out)); result == "" || result == "<nil>" {
+		if result := trashItemInHelper(t, path); result == "" || result == "<nil>" {
 			t.Errorf("TrashItem(%s) reported %q, want an error for an item bigger than the 1 MiB recycle bin", path, result)
 		} else {
 			t.Logf("TrashItem(%s): %s", path, result)
 		}
 		var size int64
-		err = filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
+		err := filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
 			}
@@ -269,6 +258,48 @@ func TestTrashItemKeepsAnItemTooBigForTheRecycleBin(t *testing.T) {
 		}
 		if after := recycled(t, path); after != before {
 			t.Errorf("TrashItem(%s): the recycle bin went from %d to %d items, want unchanged", path, before, after)
+		}
+	}
+}
+
+func TestTrashItemRecyclesAFileAsBigAsTheRecycleBin(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	if r, _, _ := procCoInitializeEx.Call(0, coinitApartmentThreaded); failed(r) {
+		t.Fatal(hresultError("CoInitializeEx", r))
+	}
+	defer procCoUninitialize.Call()
+	dir := t.TempDir()
+	setRecycleBinCapacity(t, dir, 1)
+	path := filepath.Join(dir, "file.bin")
+	if err := os.WriteFile(path, make([]byte, 1<<20), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := recycled(t, path)
+	if result := trashItemInHelper(t, path); result != "<nil>" {
+		t.Errorf("TrashItem(%s) reported %q, want <nil> for an item that fits the recycle bin", path, result)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("TrashItem(%s) did not remove the item: %v", path, err)
+	}
+	if after := recycled(t, path); after != before+1 {
+		t.Errorf("TrashItem(%s): the recycle bin went from %d to %d items, want one more", path, before, after)
+	}
+}
+
+func TestDefaultRecycleBinCapacity(t *testing.T) {
+	for _, tc := range []struct {
+		total uint64
+		want  uint64 // MiB
+	}{
+		{0, 0},
+		{10 << 30, 1024},
+		{40 << 30, 4096},
+		{160939618304, 9722},
+		{274284392448, 15126},
+	} {
+		if got := defaultRecycleBinCapacity(tc.total); got != tc.want {
+			t.Errorf("defaultRecycleBinCapacity(%d) = %d MiB, want %d", tc.total, got, tc.want)
 		}
 	}
 }
