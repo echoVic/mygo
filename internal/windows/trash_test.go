@@ -387,3 +387,28 @@ func TestTrashItemFailsWhenWindowsDeletesAFileAllTheSame(t *testing.T) {
 		t.Errorf("TrashItem(%s) kept the file (%v), so the shell did not delete it", file, err)
 	}
 }
+
+func TestTrashSinkNotesOnlyPermanentDeletes(t *testing.T) {
+	trashSinkOnce.Do(initTrashSink)
+	for _, tc := range []struct {
+		name     string
+		hr, item uintptr // hrDelete, and whether there is a new item
+		deleted  bool
+	}{
+		{"recycled", 0x00270008, 1, false},
+		{"deleted for good", 0x00270008, 0, true},
+		{"a folder too big, before its items", copyEngineSNotHandled, 0, false},
+		{"refused", eAbort, 0, false},
+	} {
+		sink := &trashSink{vtbl: &trashSinkVtbl, refs: 1}
+		p := uintptr(unsafe.Pointer(sink))
+		trashSinks[p] = sink
+		// PostDeleteItem(flags, item, hrDelete, newlyCreated), which only
+		// compares newlyCreated with nil.
+		syscall.SyscallN(trashSinkVtbl[12], p, 0, 0, tc.hr, tc.item)
+		delete(trashSinks, p)
+		if sink.deleted != tc.deleted {
+			t.Errorf("%s: deleted = %t, want %t", tc.name, sink.deleted, tc.deleted)
+		}
+	}
+}
