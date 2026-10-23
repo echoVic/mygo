@@ -1,0 +1,29 @@
+name: Try installer desktop shortcut
+
+on:
+  push:
+    branches: [try-installer-desktop-shortcut]
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Windows, os: windows-latest }
+          - { name: Linux, os: ubuntu-latest }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Download what the tests need
+        run: go run ./internal/prefetch
+      - name: The installer's languages
+        run: go test -count=1 -v -run 'TestNSISLanguage$|TestNSISDesktopShortcut|TestDesktopShortcutCatalog|TestLanguagePackaging|TestWindowsInstaller' ./cmd/mygo
+      - name: MyGo's strings
+        if: always()
+        run: go test -count=1 ./internal/l10n ./internal/i18ngen
