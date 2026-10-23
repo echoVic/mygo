@@ -28,7 +28,9 @@ func TestWindowsInstaller(t *testing.T) {
 	}
 	dir := testModule(t, map[string]string{
 		"main.go":              "package main\n\nfunc main() {}\n",
-		"mygo.json":            `{"name": "Setup Test", "identifier": "com.example.setuptest", "version": "2.0.0", "urlSchemes": ["setuptest"], "fileAssociations": [{"ext": ["setuptest"], "name": "Setup Test File"}], "windows": {"signCommand": "echo %1>>signed.txt"}}`,
+		"mygo.json":            `{"name": "Setup Test", "identifier": "com.example.setuptest", "version": "2.0.0", "urlSchemes": ["setuptest"], "fileAssociations": [{"ext": ["setuptest"], "name": "Setup Test File"}], "windows": {"signCommand": "echo %1>>signed.txt"}, "i18n": {}}`,
+		"locales/en.json":      `{}`,
+		"locales/zh-Hans.json": `{}`,
 		"resources/data/a.txt": "a",
 		"resources/icon.png":   string(defaultIcon()),
 	})
@@ -57,6 +59,21 @@ func TestWindowsInstaller(t *testing.T) {
 	}
 	if len(signed) != 3 || signed[0] != "Setup Test.exe" || signed[1] == signed[0] || signed[1] == signed[2] || signed[2] != "Setup Test Setup 2.0.0 amd64.exe" {
 		t.Errorf("signed %q", signed)
+	}
+	// The finish page uses a LangString, defined for every wizard language.
+	nsi := filepath.Join(opts.work, "installer.nsi")
+	script, err := os.ReadFile(nsi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`!define MUI_FINISHPAGE_SHOWREADME_TEXT "$(MYGO_DESKTOP_SHORTCUT)"`,
+		`LangString MYGO_DESKTOP_SHORTCUT ${LANG_ENGLISH} "Create a desktop shortcut"`,
+		`LangString MYGO_DESKTOP_SHORTCUT ${LANG_SIMPCHINESE} "创建桌面快捷方式"`,
+	} {
+		if n := strings.Count(string(script), want); n != 1 {
+			t.Errorf("installer.nsi has %d of %q, want one", n, want)
+		}
 	}
 	if runtime.GOOS != "windows" || runtime.GOARCH != "amd64" {
 		return
@@ -111,6 +128,33 @@ func TestWindowsInstaller(t *testing.T) {
 		}
 	}()
 	uninstall(t, install)
+}
+
+// TestWindowsInstallerLanguages compiles an installer in two languages and
+// checks that makensis warns of nothing: it reports a LangString missing in
+// a language only as a warning, which does not fail the build.
+func TestWindowsInstallerLanguages(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiles an installer")
+	}
+	tool, err := nsisCompiler()
+	if err != nil {
+		t.Fatal(err)
+	} else if tool == "" {
+		t.Skip("NSIS is not installed")
+	}
+	c := project(t, `{"name": "Notes", "identifier": "com.example.notes", "version": "1.0.0", "i18n": {}}`, map[string]string{
+		"en.json":      `{}`,
+		"zh-Hans.json": `{}`,
+	})
+	stage, work := t.TempDir(), t.TempDir()
+	writeFiles(t, stage, map[string]string{"Notes.exe": "app"})
+	if _, err := writeInstaller(c, stage, work, "Notes.exe", "amd64", []string{"Notes.exe"}); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command(tool, "-V2", filepath.Join(work, "installer.nsi")).CombinedOutput(); err != nil || strings.Contains(strings.ToLower(string(out)), "warning") {
+		t.Fatalf("makensis must compile every language without warnings: %v\n%s", err, out)
+	}
 }
 
 // TestWindowsInstallerEncoding checks that installer.nsi is written as UTF-8

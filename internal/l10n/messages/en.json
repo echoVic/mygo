@@ -181,5 +181,6 @@
   "clipboardRead": "A program wants to read the clipboard",
   "clipboardReadAllow": "Allow",
   "clipboardReadDeny": "Deny",
-  "clipboardReadEmpty": "The clipboard is empty."
+  "clipboardReadEmpty": "The clipboard is empty.",
+  "desktopShortcut": "Create a desktop shortcut"
 }
