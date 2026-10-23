@@ -39,6 +39,9 @@ JavaScript package whose functions call them. The app uses the Go half with
   keeps for the user to give, such as Accessibility, Screen Recording and
   the microphone: checked, asked for, and a guide to System Settings with
   the app to drag into its list, after PermissionFlow. It is all Go.
+- [Screen capture](plugins/screencapture.md): screenshots of displays and
+  windows, and recordings of them as frames, with ScreenCaptureKit,
+  Windows.Graphics.Capture and PipeWire. It is all Go.
 
 ## Using plugins
 

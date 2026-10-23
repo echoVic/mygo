@@ -169,6 +169,8 @@ components, from buttons to tables.
 - [PermissionFlow](plugins/permissionflow.md): the system's permissions,
   such as Accessibility and Screen Recording, checked and asked for, and a
   guide to System Settings with the app to drag into its list.
+- [Screen capture](plugins/screencapture.md): screenshots of displays and
+  windows, and recordings of them as frames.
 
 ## Reference
 
