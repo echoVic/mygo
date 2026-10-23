@@ -186,5 +186,6 @@
   "decimalWhole": "Enter a whole number",
   "decimalPlaces": "{n, plural, one {Use at most # decimal place} other {Use at most # decimal places}}",
   "decimalAtLeast": "Enter {min} or more",
-  "decimalAtMost": "Enter {max} or less"
+  "decimalAtMost": "Enter {max} or less",
+  "desktopShortcut": "Create a desktop shortcut"
 }

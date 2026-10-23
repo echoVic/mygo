@@ -716,10 +716,14 @@ its source language first, which the system falls back to:
   one of the user's display language, or else the source language; an
   app written in Chinese alone (`"i18n": { "source": "zh-Hans" }`) has
   an installer in Chinese only, but for MyGo's own few texts in it, the
-  desktop shortcut's check box and the messages about the running app,
-  which are in English. NSIS 3 has files of some 60 languages,
-  and a language it has none of stops the build, saying which it has.
-  The file properties have a table of strings per language.
+  messages about the running app, which are in English. The finish
+  page's check box that creates a desktop shortcut is MyGo's string
+  `mygo.desktopShortcut`, in English and
+  [MyGo's own languages](i18n.md#mygos-own-strings); an app translates
+  it to its other languages, or changes it, in its catalogs. NSIS 3
+  has files of some 60 languages, and a language it has none of stops
+  the build, saying which it has. The file properties have a table of
+  strings per language.
 
 The app's name and description in a language are its catalog's
 `mygo.appName` and `mygo.appDescription`; the configuration's `name` and

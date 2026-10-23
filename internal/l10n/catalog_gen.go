@@ -2755,3 +2755,19 @@ func DecimalAtMost(max string) string { return In(i18n.Locale()).DecimalAtMost(m
 func (msgs Messages) DecimalAtMost(max string) string {
 	return Catalog.Format(msgs.locale, "decimalAtMost", map[string]any{"max": max})
 }
+
+// DesktopShortcut says "Create a desktop shortcut"
+// in the language the app shows.
+//
+// Labels the check box on the finish page of an app's Windows installer,
+// which puts a shortcut to the app on the desktop.
+func DesktopShortcut() string { return In(i18n.Locale()).DesktopShortcut() }
+
+// DesktopShortcut says "Create a desktop shortcut"
+// in the language of msgs.
+//
+// Labels the check box on the finish page of an app's Windows installer,
+// which puts a shortcut to the app on the desktop.
+func (msgs Messages) DesktopShortcut() string {
+	return Catalog.Format(msgs.locale, "desktopShortcut", nil)
+}

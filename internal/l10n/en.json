@@ -907,5 +907,9 @@
         "type": "String"
       }
     }
+  },
+  "desktopShortcut": "Create a desktop shortcut",
+  "@desktopShortcut": {
+    "description": "Labels the check box on the finish page of an app's Windows installer, which puts a shortcut to the app on the desktop."
   }
 }
