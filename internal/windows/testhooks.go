@@ -54,6 +54,13 @@ func TestActivateMenuItem(hwnd uintptr, path ...string) error {
 	return nil
 }
 
+// TestEditRole runs an edit role, including those the core leaves out of
+// Windows menus, such as pasteAndMatchStyle.
+func TestEditRole(hwnd uintptr, role string) bool {
+	w := theBackend.windows[hwnd]
+	return w != nil && editRole(w, role)
+}
+
 // TestMenuBarShown reports whether a window shows its menu bar.
 func TestMenuBarShown(hwnd uintptr) bool {
 	bar, _, _ := user32.NewProc("GetMenu").Call(hwnd)

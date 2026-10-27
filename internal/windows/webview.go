@@ -612,7 +612,7 @@ func (w *window) acceleratorKeyPressed(_, args uintptr) {
 
 // pageEditRoles are the roles whose keys a page keeps, as in a browser and
 // in native UI: WebView2 cuts, copies and pastes with the page's own events
-// and every format of the clipboard, where editRole pastes text alone.
+// and every format of the clipboard.
 var pageEditRoles = map[string]bool{
 	"undo": true, "redo": true, "cut": true, "copy": true, "paste": true,
 	"pasteAndMatchStyle": true, "delete": true, "selectAll": true,
