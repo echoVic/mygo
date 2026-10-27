@@ -2,10 +2,14 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -20,6 +24,127 @@ import (
 
 	"github.com/egoist/mygo/internal/update"
 )
+
+type updateRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f updateRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestUpdateGetRetry(t *testing.T) {
+	dns := &net.DNSError{Err: "no such host", Name: "example.com", IsNotFound: true}
+	for _, tc := range []struct {
+		name     string
+		statuses []int
+		err      error
+		requests int
+		wantErr  bool
+	}{
+		{"recovers", []int{503, 0, 200}, dns, 3, false},
+		{"not published", []int{404}, nil, 1, true},
+		{"bad request", []int{400}, nil, 1, true},
+		{"unauthorized", []int{401}, nil, 1, true},
+		{"forbidden", []int{403}, nil, 1, true},
+		{"request timeout", []int{408}, nil, 1, true},
+		{"rate limited", []int{429}, nil, 3, true},
+		{"server error", []int{500}, nil, 3, true},
+		{"unavailable", []int{503}, nil, 3, true},
+		{"DNS error", []int{0}, dns, 3, true},
+		{"connection error", []int{0}, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}, 3, true},
+		{"timeout", []int{0}, context.DeadlineExceeded, 3, true},
+		{"connection closed", []int{0}, io.EOF, 3, true},
+		{"canceled", []int{0}, context.Canceled, 1, true},
+		{"other error", []int{0}, errors.New("invalid request"), 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			transport := http.DefaultTransport
+			wait := updateRetryWait
+			t.Cleanup(func() { http.DefaultTransport, updateRetryWait = transport, wait })
+			var delays []time.Duration
+			updateRetryWait = func(d time.Duration) { delays = append(delays, d) }
+			requests := 0
+			http.DefaultTransport = updateRoundTripper(func(r *http.Request) (*http.Response, error) {
+				status := tc.statuses[min(requests, len(tc.statuses)-1)]
+				requests++
+				if r.Method != http.MethodGet || r.URL.String() != "https://example.com/update.json" || r.Header.Get("User-Agent") != "mygo/"+version {
+					t.Errorf("request = %s %s, headers %v", r.Method, r.URL, r.Header)
+				}
+				if status == 0 {
+					return nil, tc.err
+				}
+				return &http.Response{
+					StatusCode: status,
+					Status:     http.StatusText(status),
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader("published")),
+				}, nil
+			})
+			resp, err := updateGet("https://example.com/update.json", time.Minute)
+			if requests != tc.requests {
+				t.Errorf("made %d requests, want %d", requests, tc.requests)
+			}
+			if want := ([]time.Duration{time.Second, 2 * time.Second})[:tc.requests-1]; !slices.Equal(delays, want) {
+				t.Errorf("retry delays = %v, want %v", delays, want)
+			}
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("updateGet = %v, want error %v", err, tc.wantErr)
+			}
+			if tc.wantErr {
+				if resp != nil {
+					resp.Body.Close()
+					t.Error("an unsuccessful request returned a response")
+				}
+				if tc.statuses[0] == http.StatusNotFound && !errors.Is(err, errNotPublished) {
+					t.Errorf("404 returned %v, want errNotPublished", err)
+				}
+				if tc.statuses[0] == 0 && !errors.Is(err, tc.err) {
+					t.Errorf("returned %v, want %v", err, tc.err)
+				}
+				return
+			}
+			defer resp.Body.Close()
+			if b, err := io.ReadAll(resp.Body); err != nil || string(b) != "published" {
+				t.Errorf("body = %q, %v", b, err)
+			}
+		})
+	}
+}
+
+func TestUpdateGetRetryAfter(t *testing.T) {
+	for _, tc := range []struct {
+		header string
+		first  time.Duration
+		second time.Duration
+	}{
+		{"", time.Second, 2 * time.Second},
+		{"5", 5 * time.Second, 5 * time.Second},
+		{"3600", 30 * time.Second, 30 * time.Second},
+		{"9223372036854775807", 30 * time.Second, 30 * time.Second},
+		{"Fri, 31 Dec 9999 23:59:59 GMT", 30 * time.Second, 30 * time.Second},
+		{"Sat, 01 Jan 2000 00:00:00 GMT", time.Second, 2 * time.Second},
+		{"-1", time.Second, 2 * time.Second},
+		{"invalid", time.Second, 2 * time.Second},
+	} {
+		t.Run(tc.header, func(t *testing.T) {
+			transport, wait := http.DefaultTransport, updateRetryWait
+			t.Cleanup(func() { http.DefaultTransport, updateRetryWait = transport, wait })
+			var delays []time.Duration
+			updateRetryWait = func(d time.Duration) { delays = append(delays, d) }
+			http.DefaultTransport = updateRoundTripper(func(r *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusTooManyRequests,
+					Status:     "429 Too Many Requests",
+					Header:     http.Header{"Retry-After": {tc.header}},
+					Body:       io.NopCloser(strings.NewReader("")),
+				}, nil
+			})
+			if _, err := updateGet("https://example.com/update.json", time.Minute); err == nil {
+				t.Fatal("accepted a 429 response")
+			}
+			if want := []time.Duration{tc.first, tc.second}; !slices.Equal(delays, want) {
+				t.Errorf("retry delays = %v, want %v", delays, want)
+			}
+		})
+	}
+}
 
 func TestUpdatesConfig(t *testing.T) {
 	pub, _, _ := ed25519.GenerateKey(nil)

@@ -191,8 +191,9 @@ have one, but the app copied from the disk image does not. The manifest
 lists the deltas, and the archives of the versions before for the next
 build. A delta that is not smaller than the
 archive is left out. Builds need to download the published updates then;
-when they cannot, such as for the first version, they make no deltas and
-say why.
+requests that fail with a network error, HTTP 429 or 5xx are tried up to
+3 times before giving up. When they cannot download the updates, such as
+for the first version, they make no deltas and say why.
 
 An app whose version has a delta downloads it, checks its signature and
 makes the new version from itself next to it, checking that every file has

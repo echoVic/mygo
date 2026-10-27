@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -429,8 +430,12 @@ func fetchSigned(u string, size int64, signature string, pub ed25519.PublicKey, 
 	return nil
 }
 
-// updateGet requests a published file of an update, which takes at most
-// timeout.
+// updateRetryWait is replaced by tests so retries need not sleep.
+var updateRetryWait = time.Sleep
+
+// updateGet requests a published file of an update, trying at most three
+// times for network errors, 429 and 5xx responses. Each attempt takes at
+// most timeout.
 func updateGet(u string, timeout time.Duration) (*http.Response, error) {
 	req, err := http.NewRequest(http.MethodGet, u, nil)
 	if err != nil {
@@ -441,18 +446,52 @@ func updateGet(u string, timeout time.Duration) (*http.Response, error) {
 	if token := cmp.Or(os.Getenv("GH_TOKEN"), os.Getenv("GITHUB_TOKEN")); token != "" && req.URL.Host == "api.github.com" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	resp, err := (&http.Client{Timeout: timeout}).Do(req)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		if resp.StatusCode == http.StatusNotFound {
-			return nil, errNotPublished
+	client := &http.Client{Timeout: timeout}
+	for attempt := 0; ; attempt++ {
+		resp, err := client.Do(req)
+		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return nil, err
+			}
+			// url.Error wraps every client error, even one that is not a
+			// network failure, and itself implements net.Error.
+			cause := err
+			if e, ok := errors.AsType[*url.Error](err); ok {
+				cause = e.Err
+			}
+			if _, ok := errors.AsType[net.Error](cause); !ok && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+				return nil, err
+			}
+		} else {
+			if resp.StatusCode == http.StatusOK {
+				return resp, nil
+			}
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusNotFound {
+				return nil, errNotPublished
+			}
+			err = fmt.Errorf("GET %s: %s", u, resp.Status)
+			if resp.StatusCode != http.StatusTooManyRequests && (resp.StatusCode < 500 || resp.StatusCode >= 600) {
+				return nil, err
+			}
 		}
-		return nil, fmt.Errorf("GET %s: %s", u, resp.Status)
+		if attempt == 2 {
+			return nil, err
+		}
+		delay := time.Duration(attempt+1) * time.Second
+		if resp != nil {
+			// Retry-After may be seconds or an HTTP date. Cap it before
+			// converting seconds to a duration, which could overflow.
+			after := resp.Header.Get("Retry-After")
+			if seconds, err := strconv.ParseInt(after, 10, 64); err == nil && seconds > 0 {
+				delay = max(delay, time.Duration(min(seconds, 30))*time.Second)
+			} else if at, err := http.ParseTime(after); err == nil {
+				delay = max(delay, min(time.Until(at), 30*time.Second))
+			}
+		}
+		warnf("Retrying %s in %s: %v", u, delay, err)
+		updateRetryWait(delay)
 	}
-	return resp, nil
 }
 
 func runKeygen(args []string) error {
