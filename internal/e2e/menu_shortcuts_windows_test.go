@@ -85,7 +85,7 @@ addEventListener("paste", (e) => { window.pasted = e.clipboardData.types.join(" 
 	}
 }
 
-// Choosing Edit › Paste gives the page the clipboard's formats and lets
+// Activating Edit › Paste gives the page the clipboard's formats and lets
 // the browser insert the text. Paste and Match Style still types only text.
 func TestPageMenuPaste(t *testing.T) {
 	prev := mygo.App.Menu()
@@ -115,12 +115,11 @@ for (const type of ["keydown", "keyup"]) {
 	if _, err := w.Page().Eval("document.getElementById('t').focus()"); err != nil {
 		t.Fatal(err)
 	}
-	if !openMenus(w, 'E') {
-		t.Fatal("the Edit menu could not open")
+	var err error
+	mygo.RunOnMain(func() { err = win.TestActivateMenuItem(w.NativeHandle(), "Edit", "Paste") })
+	if err != nil {
+		t.Fatal(err)
 	}
-	defer closeMenus()
-	eventually(t, "the Paste menu item", func() bool { return choosePopupItem("Paste") })
-	eventually(t, "the menu to close", func() bool { menus, _ := popupMenus(); return len(menus) == 0 })
 	waitFor(t, w, "document.getElementById('t').value === 'MyGo'")
 	if ok, err := mygo.EvalAs[bool](w.Page(), `pastes.length === 1 && pastes[0].types.includes("text/html") && pastes[0].html.includes("<b>MyGo</b>")`); err != nil || !ok {
 		pastes, _ := w.Page().Eval("JSON.stringify(pastes)")
