@@ -761,7 +761,9 @@ func (t *Tray) PopUpMenu() {
 	t.do(func(n platform.Tray) { n.PopUpMenu(snap) })
 }
 
-// Bounds returns the position of the icon on screen.
+// Bounds returns the position of the icon on screen. macOS shows a menu bar
+// item on each display: Bounds is the one the user last clicked, so a window
+// placed against it, as a flyout, goes on the display the user clicked.
 func (t *Tray) Bounds() Rectangle {
 	return onMainValue(func() Rectangle {
 		if t.native == nil {

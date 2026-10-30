@@ -325,6 +325,12 @@ type tray struct {
 	owner  int
 	// dark is the menu bar's appearance, as last told.
 	dark bool
+	// clicked is where on screen the copy of the item that the user last
+	// clicked is, and of the frame the item's window had then. macOS 26
+	// shows a menu bar item on each display from one window, which is on
+	// one of them, or out of sight on a display whose menu bar has no room
+	// for it; the copies share its size. Zero until a click.
+	clicked, of NSRect
 }
 
 // secondaryClick reports whether a click on a status item, ending with an
@@ -348,6 +354,7 @@ func registerTrayTarget() {
 				return
 			}
 			ev := send(theBackend.app, "currentEvent")
+			t.noteClick(ev)
 			if ev != 0 && secondaryClick(uint(sendInt(ev, "type")), uint(send(ev, "modifierFlags"))) {
 				t.h.RightClicked()
 			} else {
@@ -486,11 +493,52 @@ func (t *tray) PopUpMenu(m *platform.Menu) {
 }
 
 func (t *tray) Bounds() platform.Rect {
-	win := send(t.button, "window")
-	if win == 0 {
+	if send(t.button, "window") == 0 {
 		return platform.Rect{}
 	}
-	return rectFromMac(msgRect(win, sel("frame")))
+	return rectFromMac(t.frame())
+}
+
+// noteClick keeps where on screen the copy of the item that the click ev was
+// on is: the pointer's place, less the click's place in the item's window,
+// which the copies share. An event in another window, which an action that no
+// click sent leaves current, changes nothing.
+func (t *tray) noteClick(ev id) {
+	win := send(t.button, "window")
+	if ev == 0 || win == 0 || send(ev, "window") != win {
+		return
+	}
+	of := msgRect(win, sel("frame"))
+	t.clicked = clickedCopy(msgPoint(class("NSEvent"), sel("mouseLocation")), msgPoint(ev, sel("locationInWindow")), of.Size)
+	t.of = of
+}
+
+// clickedCopy is the frame on screen of the copy of a menu bar item of size
+// that a click hit at at, a point on screen, and at in, its place in the
+// item's window.
+func clickedCopy(at, in NSPoint, size NSSize) NSRect {
+	return NSRect{Origin: NSPoint{X: at.X - in.X, Y: at.Y - in.Y}, Size: size}
+}
+
+// itemFrame is where a menu bar item shows, given its window's frame: the copy
+// the user last clicked, while the window keeps the frame it had then, or else
+// the window's frame. A window that moved, as the menu bar was laid out again,
+// may have moved its copies too.
+func itemFrame(window, clicked, of NSRect) NSRect {
+	if clicked.Size.Width > 0 && window == of {
+		return clicked
+	}
+	return window
+}
+
+// frame is where the item shows on screen (itemFrame), in Cocoa's
+// coordinates; zero without a window.
+func (t *tray) frame() NSRect {
+	win := send(t.button, "window")
+	if win == 0 {
+		return NSRect{}
+	}
+	return itemFrame(msgRect(win, sel("frame")), t.clicked, t.of)
 }
 
 func (t *tray) Destroy() {
