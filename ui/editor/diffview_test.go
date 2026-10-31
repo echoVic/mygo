@@ -362,6 +362,70 @@ func TestDiffScrollsUnderAnnotation(t *testing.T) {
 	}
 }
 
+// The wheel over a separator, a hunk's header or the bar expanding the
+// unmodified lines, scrolls the diff, as it does over the lines, in both
+// layouts.
+func TestDiffScrollsOverSeparator(t *testing.T) {
+	var patch strings.Builder
+	patch.WriteString("--- a/x\n+++ b/x\n")
+	for h := range 12 {
+		n := strconv.Itoa(1 + h*100)
+		patch.WriteString("@@ -" + n + ",6 +" + n + ",6 @@ hunk " + strconv.Itoa(h) + "\n")
+		for i := range 6 {
+			patch.WriteString("-old " + strconv.Itoa(i) + "\n+new " + strconv.Itoa(i) + "\n")
+		}
+	}
+	files, err := ParsePatch(patch.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var a []string
+	for i := range 600 {
+		a = append(a, "line "+strconv.Itoa(i))
+	}
+	b := append([]string(nil), a...)
+	for i := 0; i < len(b); i += 50 {
+		b[i] = "changed"
+	}
+	for _, tc := range []struct {
+		name, find string
+		diff       func() *DiffState
+	}{
+		{"header", "@@ -201,6 +201,6 @@ hunk 2", func() *DiffState {
+			d := &DiffState{}
+			d.SetPatch(files[0])
+			return d
+		}},
+		{"separator", "unmodified lines", func() *DiffState {
+			return &DiffState{Old: NewBuffer(strings.Join(a, "\n")), New: NewBuffer(strings.Join(b, "\n"))}
+		}},
+	} {
+		for _, layout := range []DiffLayout{DiffSplit, DiffUnified} {
+			d := tc.diff()
+			d.Layout = layout
+			tt := ui.NewTester(func(c *ui.Context) { DiffView(c, d).Fill() }, 800, 600)
+			tt.Frame()
+			tt.Frame()
+			var r ui.Rect
+			found := false
+			for _, n := range tt.Texts() {
+				if strings.Contains(n, tc.find) {
+					r, found = tt.Find(n)
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("%s, layout %v: no %q in %q", tc.name, layout, tc.find, tt.Texts())
+			}
+			tt.Scroll(r.X+r.W/2, r.Y+r.H/2, 0, 40)
+			tt.Frame()
+			if y := d.eds[1].scrollY; y != 40 {
+				t.Errorf("%s, layout %v: scrolled to %v over the %s, want 40", tc.name, layout, y, tc.name)
+			}
+		}
+	}
+}
+
 // A filler's stripes are those in sight, however high it is, at -45°
 // every 8 DIPs from its bottom-left corner, which they keep to as it
 // scrolls.
