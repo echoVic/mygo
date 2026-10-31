@@ -986,6 +986,7 @@ type MessageBoxOptions struct {
 	Buttons         []string
 	DefaultID       int
 	CancelID        int
+	DestructiveIDs  []int
 	CheckboxLabel   string
 	CheckboxChecked bool
 }
