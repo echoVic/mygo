@@ -4329,7 +4329,22 @@ renderer's (`gputest.Compare`).
   of the app: the app in `/opt/<name>`, a `/usr/bin` link for each name
   of `linux.command`, the desktop entry (categories,
   comment, URL schemes; `Exec` is the app's path) and hicolor icons,
-  depending on GTK 3 and WebKitGTK 4.1. Packages hold the same files as
+  depending on GTK 3 and WebKitGTK 4.1. It also gets a `PKGBUILD`
+  (`pkgbuild.go`), from which `makepkg -si` packages the archive for
+  Arch Linux (`source` is its file name, with its SHA-256): its
+  `package()` installs what the Debian package holds, with the same
+  modes, the desktop entry written in it with `printf` as `deb.go`
+  renders it, and the hicolor icons, which the build resizes as for the
+  Debian package and writes next to it as more sources
+  (`<name>-256x256.png`, `<name>-512x512.png`); pacman's hooks register
+  them, the MIME package and the desktop entry, as the triggers of
+  Debian do. `pkgver` is the version without the hyphen of a
+  pre-release (`1.2.0beta.1`; vercmp sorts `1.2.0_beta.1` after
+  `1.2.0`, as a remainder starting with a separator wins), `depends`
+  maps the Debian dependencies through `archPackages`, warning about
+  those it lacks, and `options` keeps the executable unstripped. Every
+  value is quoted for the shell, and `-upload` leaves it out (`uploads`
+  takes only known kinds). Packages hold the same files as
   the update archive; apps installed by a package manager do not update
   themselves (`Updater.Enabled` checks that the app can write where it is
   installed). Every Linux build also gets `install.sh`
