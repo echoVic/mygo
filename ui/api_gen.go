@@ -1033,6 +1033,31 @@ func DateInput(c *Context, date *time.Time) Element {
 	return wrapElement(_e)
 }
 
+// DecimalInput creates a text input editing *value as an exact decimal
+// between lo and hi, which the arrows Up and Down, and the buttons beside
+// it, step by step: a NumberInput for amounts of money, which it never
+// rounds. *value is written with exactly the decimals of step, as
+// "1234.50"; lo and hi are written the same way, "" for no limit. What is
+// typed applies as soon as it is a number in range, with '.' before its
+// decimals and ',' between groups of three digits: "1,234.5" sets
+// "1234.50", and shows so once the input loses the focus. Text with more
+// decimals than step's (other than zeros), out of range or not a number
+// leaves *value as it was and marks the input with Error, whose message
+// an enclosing Field shows, until it is corrected. A value the app sets
+// replaces what was typed. Changed reports a new value.
+//
+//	ui.DecimalInput(c, &app.amount, "0", "", "0.01")
+func DecimalInput(c *Context, value *string, lo string, hi string, step string) Element {
+	_ctx := c.build()
+	if _ctx == nil {
+		return Element{}
+	}
+	_ctx.rt.beginBuild()
+	_e := coreDecimalInput(_ctx, value, lo, hi, step)
+	_ctx.rt.endBuild()
+	return wrapElement(_e)
+}
+
 // DialogBase shows a dialog without a look over the window while *open is
 // true: fn styles the backdrop covering the window, which centers the
 // panel, and the panel, and builds the panel's content. Clicking the
