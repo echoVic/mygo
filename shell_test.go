@@ -56,6 +56,23 @@ func TestTrashItemRelativePath(t *testing.T) {
 	}
 }
 
+func TestTrashItemResultRelativePath(t *testing.T) {
+	t.Chdir(t.TempDir())
+	defer func() { fake.Trashed = nil }()
+	trashPath, err := Shell.TrashItemResult(filepath.Join("docs", "report.pdf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wd, _ := os.Getwd()
+	wantSrc := filepath.Join(wd, "docs", "report.pdf")
+	if !slices.Equal(fake.Trashed, []string{wantSrc}) {
+		t.Errorf("TrashItemResult recorded %q, want %q", fake.Trashed, wantSrc)
+	}
+	if trashPath == "" {
+		t.Error("TrashItemResult returned an empty trash path")
+	}
+}
+
 func TestInstalledApps(t *testing.T) {
 	fake.Apps = []platform.Application{
 		{Name: "zed", ID: "dev.zed.Zed", Path: "/Applications/Zed.app"},

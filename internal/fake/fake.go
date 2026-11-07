@@ -10,6 +10,7 @@ import (
 	"image"
 	"image/png"
 	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
@@ -1182,6 +1183,12 @@ var Trashed []string
 func (shell) TrashItem(path string) error {
 	Trashed = append(Trashed, path)
 	return nil
+}
+
+func (shell) TrashItemResult(path string) (string, error) {
+	Trashed = append(Trashed, path)
+	// Return a synthetic trash path so callers can test restore without a real Trash.
+	return filepath.Join(os.Getenv("HOME"), ".Trash", filepath.Base(path)), nil
 }
 
 // Opened are the paths OpenApplication was given.

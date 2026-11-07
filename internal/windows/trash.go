@@ -7,6 +7,8 @@ import (
 	"sync"
 	"syscall"
 	"unsafe"
+
+	"github.com/egoist/mygo/internal/platform"
 )
 
 // The recycle bin, through IFileOperation as Electron's shell.trashItem.
@@ -130,3 +132,5 @@ func (shell) TrashItem(path string) error {
 	}
 	return nil
 }
+
+func (shell) TrashItemResult(string) (string, error) { return "", platform.ErrUnsupported }

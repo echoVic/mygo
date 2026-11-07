@@ -63,6 +63,33 @@ func (ShellModule) TrashItem(path string) error {
 	return onMainValue(func() error { return backend().Shell().TrashItem(abs) })
 }
 
+// TrashItemResult moves a file or directory to the trash and returns the
+// path where it landed inside the trash directory, so an app can put it
+// back exactly. A relative path is relative to the working directory.
+//
+// It is supported on macOS only. On Windows, Linux and in browsers it
+// returns ("", ErrUnsupported): Windows's IFileOperation and Linux's
+// g_file_trash do not report the resulting path. Use TrashItem there, and
+// record the original path yourself before trashing, as Finder's "Put
+// Back" does on macOS.
+//
+// On macOS the returned path is where the system left the item, which may
+// not be the same name as the input: Finder renames an item that collides
+// with one already in the trash ("foo.txt" -> "foo 2.txt").
+func (ShellModule) TrashItemResult(path string) (string, error) {
+	needsApp("Shell.TrashItemResult")
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	var trashPath string
+	err = onMainValue(func() error {
+		trashPath, err = backend().Shell().TrashItemResult(abs)
+		return err
+	})
+	return trashPath, err
+}
+
 // FileIcon returns the icon the file manager shows for a file, a folder or
 // an application, as a PNG image of size by size pixels: pass the size in
 // DIPs times the display's scale factor for a sharp icon. On Windows path
