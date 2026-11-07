@@ -11,6 +11,8 @@ import (
 	"sync"
 	"syscall"
 	"unsafe"
+
+	"github.com/egoist/mygo/internal/platform"
 )
 
 // The recycle bin, through IFileOperation as Electron's shell.trashItem.
@@ -143,6 +145,8 @@ func (shell) TrashItem(path string) error {
 	}
 	return nil
 }
+
+func (shell) TrashItemResult(string) (string, error) { return "", platform.ErrUnsupported }
 
 // recycleBinKey returns the key, under HKEY_CURRENT_USER, of the settings
 // of the recycle bin of path's volume. A network share has none.

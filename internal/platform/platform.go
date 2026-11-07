@@ -1205,6 +1205,10 @@ type Shell interface {
 	OpenPath(path string) error
 	ShowItemInFolder(path string)
 	TrashItem(path string) error
+	// TrashItemResult moves the item at path to the trash and returns the
+	// path where it landed inside the trash directory. It is supported on
+	// macOS only; all other platforms return ("", ErrUnsupported).
+	TrashItemResult(path string) (string, error)
 	// PreviewItem shows the item at path in the Quick Look panel, the
 	// preview Finder opens with the space bar. It is supported on macOS
 	// only; all other platforms return ErrUnsupported.
