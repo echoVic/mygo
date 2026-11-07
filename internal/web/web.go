@@ -513,6 +513,7 @@ func (shell) OpenExternal(url string) error {
 func (shell) OpenPath(string) error                { return errUnsupported }
 func (shell) ShowItemInFolder(string)              {}
 func (shell) TrashItem(string) error               { return errUnsupported }
+func (shell) TrashItemResult(string) (string, error) { return "", platform.ErrUnsupported }
 func (shell) PreviewItem(string) error             { return errUnsupported }
 func (shell) Beep()                                {}
 func (shell) FileIcon(string, int) ([]byte, error) { return nil, errUnsupported }
