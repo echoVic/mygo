@@ -141,15 +141,15 @@ func TestPanelText(t *testing.T) {
 		}
 		return b.String()
 	}
-	// Default English text.
-	if got, want := render(panelText("MyApp", "Accessibility", "")), "Drag **MyApp** to the list above to allow **Accessibility**."; got != want {
+	// Default English text (locale "en").
+	got := render(panelText("MyApp", "Accessibility", "en"))
+	if want := "Drag MyApp to the list above to allow Accessibility."; got != want {
 		t.Errorf("panel says %q, want %q", got, want)
 	}
-	// Custom label replaces the whole sentence, no bold.
-	custom := "将 Cleanzo 拖入上方列表以允许辅助功能。"
-	runs := panelText("MyApp", "Accessibility", custom)
-	if len(runs) != 1 || runs[0].bold || runs[0].text != custom {
-		t.Errorf("custom label: got %v, want single plain run %q", runs, custom)
+	// Single plain run.
+	runs := panelText("MyApp", "Accessibility", "en")
+	if len(runs) != 1 || runs[0].bold {
+		t.Errorf("panelText returned %v, want single plain run", runs)
 	}
 	for path, want := range map[string]string{
 		"/Applications/My App.app":  "My App",

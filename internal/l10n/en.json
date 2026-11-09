@@ -915,5 +915,21 @@
   "selected": "selected",
   "@selected": {
     "description": "What VoiceOver reads after the name of a cell of a grid that is chosen, as a calendar's day picked, where it reads no chosen state of cells itself."
+  },
+  "guideDrag": "Drag {app} to the list above to allow {permission}.",
+  "@guideDrag": {
+    "description": "The sentence the permissionflow Guide panel shows above the app card. 'app' is the name of the app to drag, 'permission' is the name of the permission, as 'Accessibility'.",
+    "placeholders": {
+      "app": {
+        "type": "String"
+      },
+      "permission": {
+        "type": "String"
+      }
+    }
+  },
+  "guideDragHint": "Drag",
+  "@guideDragHint": {
+    "description": "The small hint label on the app card of the permissionflow Guide panel, next to the hand icon, telling the user to drag the app."
   }
 }

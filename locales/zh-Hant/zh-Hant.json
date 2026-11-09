@@ -189,5 +189,7 @@
   "decimalAtLeast": "請輸入不小於 {min} 的值",
   "decimalAtMost": "請輸入不大於 {max} 的值",
   "desktopShortcut": "建立桌面捷徑",
-  "selected": "已選取"
+  "selected": "已選取",
+  "guideDrag": "將{app}拖入上方列表以允許{permission}。",
+  "guideDragHint": "拖入"
 }

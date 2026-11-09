@@ -188,5 +188,7 @@
   "decimalAtLeast": "Enter {min} or more",
   "decimalAtMost": "Enter {max} or less",
   "desktopShortcut": "Create a desktop shortcut",
-  "selected": "selected"
+  "selected": "selected",
+  "guideDrag": "Drag {app} to the list above to allow {permission}.",
+  "guideDragHint": "Drag"
 }

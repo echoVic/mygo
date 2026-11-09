@@ -3,6 +3,8 @@ package permissionflow
 import (
 	"path/filepath"
 	"strings"
+
+	"github.com/egoist/mygo/internal/l10n"
 )
 
 // The parts of the systems' implementations that are plain computation,
@@ -74,24 +76,13 @@ type run struct {
 	bold bool
 }
 
-// panelText is what the panel says. When label is non-empty it is used
-// as-is (a single plain run), letting callers supply a localised string.
-// Otherwise the default is "Drag **MyApp** to the list above to allow
-// **Accessibility**.", as PermissionFlow's panel does.
-func panelText(app, permission, label string) []run {
-	if label != "" {
-		return []run{{text: label}}
-	}
-	return []run{
-		{text: "Drag "},
-		{text: app, bold: true},
-		{text: " to the list above to allow "},
-		{text: permission, bold: true},
-		{text: "."},
-	}
-}
-
-// rect is a rectangle in AppKit's screen coordinates: points, from the
+// panelText is what the panel says: "Drag **MyApp** to the list above to
+// allow **Accessibility**.", as PermissionFlow's does, in the language of
+// locale. It calls l10n.GuideDrag for the sentence, which apps translate
+// by overriding the "mygo.guideDrag" key in their own catalogs.
+func panelText(app, permission, locale string) []run {
+	return []run{{text: l10n.In(locale).GuideDrag(app, permission)}}
+}// rect is a rectangle in AppKit's screen coordinates: points, from the
 // bottom left of the main display, y going up.
 type rect struct{ X, Y, W, H float64 }
 

@@ -2789,3 +2789,39 @@ func Selected() string { return In(i18n.Locale()).Selected() }
 func (msgs Messages) Selected() string {
 	return Catalog.Format(msgs.locale, "selected", nil)
 }
+
+// GuideDrag says "Drag {app} to the list above to allow {permission}."
+// in the language the app shows.
+//
+// The sentence the permissionflow Guide panel shows above the app card.
+// 'app' is the name of the app to drag, 'permission' is the name of the
+// permission, as 'Accessibility'.
+func GuideDrag(app string, permission string) string {
+	return In(i18n.Locale()).GuideDrag(app, permission)
+}
+
+// GuideDrag says "Drag {app} to the list above to allow {permission}."
+// in the language of msgs.
+//
+// The sentence the permissionflow Guide panel shows above the app card.
+// 'app' is the name of the app to drag, 'permission' is the name of the
+// permission, as 'Accessibility'.
+func (msgs Messages) GuideDrag(app string, permission string) string {
+	return Catalog.Format(msgs.locale, "guideDrag", map[string]any{"app": app, "permission": permission})
+}
+
+// GuideDragHint says "Drag"
+// in the language the app shows.
+//
+// The small hint label on the app card of the permissionflow Guide panel,
+// next to the hand icon, telling the user to drag the app.
+func GuideDragHint() string { return In(i18n.Locale()).GuideDragHint() }
+
+// GuideDragHint says "Drag"
+// in the language of msgs.
+//
+// The small hint label on the app card of the permissionflow Guide panel,
+// next to the hand icon, telling the user to drag the app.
+func (msgs Messages) GuideDragHint() string {
+	return Catalog.Format(msgs.locale, "guideDragHint", nil)
+}
