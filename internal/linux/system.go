@@ -221,10 +221,6 @@ func (shell) PreviewItem(string) error { return platform.ErrUnsupported }
 
 func (shell) Beep() { gdkDisplayBeep(gdkDisplayGetDefault()) }
 
-func (shell) DefaultApp(string) (platform.Application, error) {
-	return platform.Application{}, platform.ErrUnsupported
-}
-
 // Screen.
 
 type screen struct{}

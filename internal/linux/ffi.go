@@ -141,7 +141,6 @@ var (
 	gAppInfoGetDefaultForURIScheme func(scheme *byte) ptr
 	gAppInfoGetID                  func(info ptr) ptr
 	gAppInfoGetDefaultForType      func(contentType *byte, mustSupportURIs bool) ptr
-	gContentTypeGuess              func(filename *byte, data ptr, dataSize uintptr, uncertain ptr) ptr
 	gFileNewForPath                func(path *byte) ptr
 	gFileGetURI                    func(file ptr) ptr
 	gFileTrash                     func(file ptr, cancellable ptr, err *ptr) bool
@@ -624,7 +623,6 @@ func load() error {
 	mustBind(i, &gAppInfoGetDefaultForURIScheme, "g_app_info_get_default_for_uri_scheme")
 	mustBind(i, &gAppInfoGetID, "g_app_info_get_id")
 	mustBind(i, &gAppInfoGetDefaultForType, "g_app_info_get_default_for_type")
-	mustBind(i, &gContentTypeGuess, "g_content_type_guess")
 	mustBind(i, &gFileNewForPath, "g_file_new_for_path")
 	mustBind(i, &gFileGetURI, "g_file_get_uri")
 	mustBind(i, &gFileTrash, "g_file_trash")
