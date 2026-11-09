@@ -98,7 +98,7 @@ func (shell) DefaultApp(rawURL string) (platform.Application, error) {
 	if scheme != "" {
 		info = gAppInfoGetDefaultForURIScheme(cs(scheme))
 	} else if ext != "" {
-		ct := gContentTypeGuess(cs(ext), 0, 0, 0)
+		ct := gContentTypeGuess(cs(ext), 0, 0, nil)
 		if ct == 0 {
 			return platform.Application{}, fmt.Errorf("mygo: no application found for %q", rawURL)
 		}
