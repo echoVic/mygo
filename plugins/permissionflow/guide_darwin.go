@@ -93,17 +93,17 @@ var (
 
 // A flow is one call of Guide.
 type flow struct {
-	p          Permission
-	app, name  string
-	draggable  bool
-	stop       chan struct{} // closed when the user closes it, or another flow starts
-	stopOnce   sync.Once
-	panel      objc.ID
-	views      panelViews
-	labelH     float64
-	shown      bool
-	dragOrigin nsPoint
-	dragBegan  bool
+	p               Permission
+	app, name, label string
+	draggable       bool
+	stop            chan struct{} // closed when the user closes it, or another flow starts
+	stopOnce        sync.Once
+	panel           objc.ID
+	views           panelViews
+	labelH          float64
+	shown           bool
+	dragOrigin      nsPoint
+	dragBegan       bool
 }
 
 // panelViews are the views of the panel, which its content view keeps.
@@ -268,7 +268,7 @@ func guide(ctx context.Context, p Permission, opts GuideOptions) (Status, error)
 	if err := registerClasses(); err != nil {
 		return Unknown, err
 	}
-	f := &flow{p: p, app: opts.App, name: opts.Name, draggable: macDraggable(p), stop: make(chan struct{})}
+	f := &flow{p: p, app: opts.App, name: opts.Name, label: opts.Label, draggable: macDraggable(p), stop: make(chan struct{})}
 	if f.app == "" {
 		f.app = defaultApp()
 	}
@@ -482,7 +482,7 @@ func (f *flow) build(w float64) {
 
 	label := class("NSTextField").Send(sel("wrappingLabelWithString:"), nsString(""))
 	text := class("NSMutableAttributedString").Send(sel("alloc")).Send(sel("init"))
-	for _, r := range panelText(f.name, f.p.Title()) {
+	for _, r := range panelText(f.name, f.p.Title(), f.label) {
 		font := class("NSFont").Send(sel("systemFontOfSize:"), 13.0)
 		if r.bold {
 			font = class("NSFont").Send(sel("boldSystemFontOfSize:"), 13.0)

@@ -130,16 +130,26 @@ func TestWait(t *testing.T) {
 }
 
 func TestPanelText(t *testing.T) {
-	var b strings.Builder
-	for _, r := range panelText("MyApp", "Accessibility") {
-		if r.bold {
-			b.WriteString("**" + r.text + "**")
-		} else {
-			b.WriteString(r.text)
+	render := func(runs []run) string {
+		var b strings.Builder
+		for _, r := range runs {
+			if r.bold {
+				b.WriteString("**" + r.text + "**")
+			} else {
+				b.WriteString(r.text)
+			}
 		}
+		return b.String()
 	}
-	if got, want := b.String(), "Drag **MyApp** to the list above to allow **Accessibility**."; got != want {
+	// Default English text.
+	if got, want := render(panelText("MyApp", "Accessibility", "")), "Drag **MyApp** to the list above to allow **Accessibility**."; got != want {
 		t.Errorf("panel says %q, want %q", got, want)
+	}
+	// Custom label replaces the whole sentence, no bold.
+	custom := "将 Cleanzo 拖入上方列表以允许辅助功能。"
+	runs := panelText("MyApp", "Accessibility", custom)
+	if len(runs) != 1 || runs[0].bold || runs[0].text != custom {
+		t.Errorf("custom label: got %v, want single plain run %q", runs, custom)
 	}
 	for path, want := range map[string]string{
 		"/Applications/My App.app":  "My App",
