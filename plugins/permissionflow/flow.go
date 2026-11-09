@@ -74,9 +74,14 @@ type run struct {
 	bold bool
 }
 
-// panelText is what the panel says, as PermissionFlow's does: "Drag
-// **MyApp** to the list above to allow **Accessibility**."
-func panelText(app, permission string) []run {
+// panelText is what the panel says. When label is non-empty it is used
+// as-is (a single plain run), letting callers supply a localised string.
+// Otherwise the default is "Drag **MyApp** to the list above to allow
+// **Accessibility**.", as PermissionFlow's panel does.
+func panelText(app, permission, label string) []run {
+	if label != "" {
+		return []run{{text: label}}
+	}
 	return []run{
 		{text: "Drag "},
 		{text: app, bold: true},

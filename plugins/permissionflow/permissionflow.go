@@ -244,6 +244,13 @@ type GuideOptions struct {
 	// Name is the name the panel gives the app: App's without its
 	// extension when it is empty.
 	Name string
+	// Label is the sentence the panel shows above the app to drag, for
+	// apps that need it in a language other than English. It replaces the
+	// default "Drag MyApp to the list above to allow Accessibility." when
+	// non-empty. The app name and the permission name are already in the
+	// panel's card and the Settings page, so a short imperative such as
+	// "将 Cleanzo 拖入上方列表以允许辅助功能。" works well.
+	Label string
 }
 
 // Guide opens the page of the system's settings where the user gives p,
