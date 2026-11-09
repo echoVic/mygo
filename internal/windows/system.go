@@ -318,6 +318,9 @@ func (shell) ShowItemInFolder(path string) {
 func (shell) Beep() { procMessageBeep.Call(0) }
 
 func (shell) PreviewItem(string) error { return platform.ErrUnsupported }
+func (shell) DefaultApp(string) (platform.Application, error) {
+	return platform.Application{}, platform.ErrUnsupported
+}
 
 // Screen.
 

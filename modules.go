@@ -172,6 +172,23 @@ func (ShellModule) LaunchApp(app InstalledApp) error {
 	return onMainValue(func() error { return backend().Shell().OpenApplication(app.Path) })
 }
 
+// DefaultApp returns the application the system would use to open url, the
+// default handler for it: the browser for a web URL, the editor for a
+// text file, and so on. url may be a web URL such as https://example.com,
+// a file:// URL, or any URL whose scheme is registered with Launch
+// Services; on macOS the scheme of any registered URL is accepted.
+// It is supported on macOS; other platforms return ErrUnsupported.
+func (ShellModule) DefaultApp(url string) (InstalledApp, error) {
+	needsApp("Shell.DefaultApp")
+	var app platform.Application
+	err := onMainValue(func() error {
+		var e error
+		app, e = backend().Shell().DefaultApp(url)
+		return e
+	})
+	return InstalledApp(app), err
+}
+
 // Beep plays the system alert sound.
 func (ShellModule) Beep() {
 	needsApp("Shell.Beep")
