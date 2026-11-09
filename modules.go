@@ -175,9 +175,9 @@ func (ShellModule) LaunchApp(app InstalledApp) error {
 // DefaultApp returns the application the system would use to open url, the
 // default handler for it: the browser for a web URL, the editor for a
 // text file, and so on. url may be a web URL such as https://example.com,
-// a file:// URL, or any URL whose scheme is registered with Launch
-// Services; on macOS the scheme of any registered URL is accepted.
-// It is supported on macOS; other platforms return ErrUnsupported.
+// a file:// URL, or any URL whose scheme is registered with the system.
+// It is supported on macOS, Linux and Windows; other platforms return
+// ErrUnsupported.
 func (ShellModule) DefaultApp(url string) (InstalledApp, error) {
 	needsApp("Shell.DefaultApp")
 	var app platform.Application
