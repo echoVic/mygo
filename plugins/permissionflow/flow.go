@@ -76,13 +76,50 @@ type run struct {
 	bold bool
 }
 
+const (
+	guideAppMarker        = "\x00mygo.permissionflow.app\x00"
+	guidePermissionMarker = "\x00mygo.permissionflow.permission\x00"
+)
+
 // panelText is what the panel says: "Drag **MyApp** to the list above to
 // allow **Accessibility**.", as PermissionFlow's does, in the language of
-// locale. It calls l10n.GuideDrag for the sentence, which apps translate
-// by overriding the "mygo.guideDrag" key in their own catalogs.
+// locale. Marker values let translated messages reorder the bold runs.
 func panelText(app, permission, locale string) []run {
-	return []run{{text: l10n.In(locale).GuideDrag(app, permission)}}
-}// rect is a rectangle in AppKit's screen coordinates: points, from the
+	text := l10n.In(locale).GuideDrag(guideAppMarker, guidePermissionMarker)
+	return splitRuns(text,
+		runMarker{token: guideAppMarker, text: app},
+		runMarker{token: guidePermissionMarker, text: permission},
+	)
+}
+
+type runMarker struct {
+	token string
+	text  string
+}
+
+func splitRuns(text string, markers ...runMarker) []run {
+	var runs []run
+	for len(text) > 0 {
+		index, marker := -1, runMarker{}
+		for _, candidate := range markers {
+			if i := strings.Index(text, candidate.token); i >= 0 && (index < 0 || i < index) {
+				index, marker = i, candidate
+			}
+		}
+		if index < 0 {
+			runs = append(runs, run{text: text})
+			break
+		}
+		if index > 0 {
+			runs = append(runs, run{text: text[:index]})
+		}
+		runs = append(runs, run{text: marker.text, bold: true})
+		text = text[index+len(marker.token):]
+	}
+	return runs
+}
+
+// rect is a rectangle in AppKit's screen coordinates: points, from the
 // bottom left of the main display, y going up.
 type rect struct{ X, Y, W, H float64 }
 

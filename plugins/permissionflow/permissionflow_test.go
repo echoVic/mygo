@@ -7,6 +7,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/egoist/mygo/i18n"
+
+	_ "github.com/egoist/mygo/locales/zh-Hans"
 )
 
 func TestPermissions(t *testing.T) {
@@ -141,15 +145,13 @@ func TestPanelText(t *testing.T) {
 		}
 		return b.String()
 	}
-	// Default English text (locale "en").
+	// The localized sentence keeps the app and permission runs bold.
 	got := render(panelText("MyApp", "Accessibility", "en"))
-	if want := "Drag MyApp to the list above to allow Accessibility."; got != want {
+	if want := "Drag **MyApp** to the list above to allow **Accessibility**."; got != want {
 		t.Errorf("panel says %q, want %q", got, want)
 	}
-	// Single plain run.
-	runs := panelText("MyApp", "Accessibility", "en")
-	if len(runs) != 1 || runs[0].bold {
-		t.Errorf("panelText returned %v, want single plain run", runs)
+	if got, want := render(panelText("应用", "辅助功能", "zh-Hans")), "将**应用**拖入上方列表以允许**辅助功能**。"; got != want {
+		t.Errorf("Chinese panel says %q, want %q", got, want)
 	}
 	for path, want := range map[string]string{
 		"/Applications/My App.app":  "My App",
@@ -158,6 +160,30 @@ func TestPanelText(t *testing.T) {
 	} {
 		if got := appName(path); got != want {
 			t.Errorf("appName(%q) = %q, want %q", path, got, want)
+		}
+	}
+}
+
+func TestPermissionTitlesFollowLocale(t *testing.T) {
+	i18n.SetLocaleFunc(func() string { return "zh-Hans" })
+	t.Cleanup(func() { i18n.SetLocaleFunc(nil) })
+	want := map[Permission]string{
+		Accessibility:   "辅助功能",
+		ScreenRecording: "屏幕录制",
+		InputMonitoring: "输入监控",
+		FullDiskAccess:  "完全磁盘访问权限",
+		AppManagement:   "应用管理",
+		DeveloperTools:  "开发者工具",
+		Microphone:      "麦克风",
+		Camera:          "相机",
+		Calendars:       "日历",
+		Reminders:       "提醒事项",
+		Bluetooth:       "蓝牙",
+		MediaAppleMusic: "媒体与 Apple Music",
+	}
+	for p, want := range want {
+		if got := p.Title(); got != want {
+			t.Errorf("%s.Title() = %q, want %q", p, got, want)
 		}
 	}
 }
