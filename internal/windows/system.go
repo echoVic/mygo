@@ -350,6 +350,9 @@ func (shell) DefaultApp(urlStr string) (platform.Application, error) {
 	if e != nil || exe == "" {
 		return platform.Application{}, fmt.Errorf("mygo: no application found for %q", urlStr)
 	}
+	if isOpenWithExecutable(exe) {
+		return platform.Application{}, fmt.Errorf("mygo: no application found for %q", urlStr)
+	}
 	if app, ok, _ := findInstalledApplication(exe); ok {
 		return app, nil
 	}

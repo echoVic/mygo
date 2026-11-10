@@ -23,3 +23,10 @@ func applicationByExecutable(apps []platform.Application, executable string, res
 	}
 	return platform.Application{}, false
 }
+
+func isOpenWithExecutable(path string) bool {
+	if i := strings.LastIndexAny(path, `\/`); i >= 0 {
+		path = path[i+1:]
+	}
+	return strings.EqualFold(path, "OpenWith.exe")
+}

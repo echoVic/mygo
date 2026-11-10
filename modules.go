@@ -177,15 +177,14 @@ func (ShellModule) LaunchApp(app InstalledApp) error {
 // text file, and so on. url may be a web URL such as https://example.com,
 // a file:// URL, or any URL whose scheme is registered with the system.
 // It is supported on macOS, Linux and Windows; other platforms return
-// ErrUnsupported.
+// ErrUnsupported. It reads system associations: call it from a goroutine of
+// its own, which it does not block the main thread from.
 func (ShellModule) DefaultApp(url string) (InstalledApp, error) {
 	needsApp("Shell.DefaultApp")
-	var app platform.Application
-	err := onMainValue(func() error {
-		var e error
-		app, e = backend().Shell().DefaultApp(url)
-		return e
-	})
+	if !isMainThread() {
+		App.waitReady()
+	}
+	app, err := backend().Shell().DefaultApp(url)
 	return InstalledApp(app), err
 }
 

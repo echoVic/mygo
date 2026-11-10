@@ -19,8 +19,16 @@ var (
 	folderIDAppsFolder = guid("1e87508d-89c2-42f0-8a7e-645a0f50ca58")
 	bhidEnumItems      = guid("94f60519-2850-4924-aa5a-d15e84868039")
 	iidIEnumShellItems = guid("70629033-e363-4a28-a567-0db78006e6d7")
+	iidIShellItem2     = guid("7e9fb0d3-919f-4307-ab2e-9b1860310c93")
 	iidIPersistFile    = guid("0000010b-0000-0000-c000-000000000046")
 )
+
+const si2GetString = 17 // IShellItem2::GetString
+
+var pkeyLinkTargetParsingPath = propertyKey{
+	Format: guid("b9b4b3fc-2b51-4a42-b5d8-324146afcf25"),
+	ID:     2,
+}
 
 const appsFolder = `shell:AppsFolder\`
 
@@ -112,6 +120,9 @@ func findInstalledApplication(executable string) (platform.Application, bool, er
 }
 
 func itemExecutable(item uintptr, sigdnFileSysPath uint32) string {
+	if target := itemTargetParsingPath(item); target != "" {
+		return target
+	}
 	var path uintptr
 	if failed(comCall(item, 5, uintptr(sigdnFileSysPath), uintptr(unsafe.Pointer(&path)))) {
 		return ""
@@ -121,6 +132,19 @@ func itemExecutable(item uintptr, sigdnFileSysPath uint32) string {
 		return pathName
 	}
 	return shortcutTarget(pathName)
+}
+
+func itemTargetParsingPath(item uintptr) string {
+	item2 := queryInterface(item, &iidIShellItem2)
+	if item2 == 0 {
+		return ""
+	}
+	defer release(item2)
+	var path uintptr
+	if failed(comCall(item2, si2GetString, uintptr(unsafe.Pointer(&pkeyLinkTargetParsingPath)), uintptr(unsafe.Pointer(&path)))) {
+		return ""
+	}
+	return takeWstr(path)
 }
 
 func shortcutTarget(path string) string {

@@ -28,3 +28,14 @@ func TestAssocStrAppID(t *testing.T) {
 		t.Fatalf("ASSOCSTR_APPID = %d, want 21", assocstrAppID)
 	}
 }
+
+func TestIsOpenWithExecutable(t *testing.T) {
+	for _, path := range []string{`C:\Windows\System32\OpenWith.exe`, `openwith.EXE`} {
+		if !isOpenWithExecutable(path) {
+			t.Errorf("isOpenWithExecutable(%q) = false, want true", path)
+		}
+	}
+	if isOpenWithExecutable(`C:\Apps\Excel.exe`) {
+		t.Error("isOpenWithExecutable matched a real application")
+	}
+}
