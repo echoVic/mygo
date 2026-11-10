@@ -184,7 +184,7 @@ func (ShellModule) DefaultApp(url string) (InstalledApp, error) {
 	if !isMainThread() {
 		App.waitReady()
 	}
-	app, err := backend().Shell().DefaultApp(url)
+	app, err := backend().DefaultApp(url)
 	return InstalledApp(app), err
 }
 

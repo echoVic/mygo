@@ -517,10 +517,15 @@ func (shell) PreviewItem(string) error             { return errUnsupported }
 func (shell) Beep()                                {}
 func (shell) FileIcon(string, int) ([]byte, error) { return nil, errUnsupported }
 func (shell) TypeIcon(string, int) ([]byte, error) { return nil, errUnsupported }
-func (shell) OpenApplication(string) error                         { return errUnsupported }
-func (shell) DefaultApp(string) (platform.Application, error)     { return platform.Application{}, errUnsupported }
+func (shell) OpenApplication(string) error         { return errUnsupported }
+func (shell) DefaultApp(string) (platform.Application, error) {
+	return platform.Application{}, errUnsupported
+}
 
 func (*Backend) Applications() ([]platform.Application, error) { return nil, errUnsupported }
+func (*Backend) DefaultApp(string) (platform.Application, error) {
+	return platform.Application{}, errUnsupported
+}
 
 type screen struct{}
 

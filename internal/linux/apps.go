@@ -59,6 +59,10 @@ func (b *Backend) Applications() ([]platform.Application, error) {
 	return apps, nil
 }
 
+func (b *Backend) DefaultApp(url string) (platform.Application, error) {
+	return b.Shell().DefaultApp(url)
+}
+
 // OpenApplication launches the application of a desktop entry, with the
 // display's launch context, which gives it startup notification or the
 // activation token that lets it take the focus.
