@@ -350,18 +350,15 @@ func (shell) DefaultApp(urlStr string) (platform.Application, error) {
 	if e != nil || exe == "" {
 		return platform.Application{}, fmt.Errorf("mygo: no application found for %q", urlStr)
 	}
+	if app, ok, _ := findInstalledApplication(exe); ok {
+		return app, nil
+	}
 	name := exe
 	if n, e := assocQueryString(assocstrFriendlyAppName, assoc); e == nil && n != "" {
 		name = n
 	}
 	return platform.Application{Name: name, ID: exe, Path: exe}, nil
 }
-
-const (
-	assocstrExecutable      = 2
-	assocstrFriendlyAppName = 4
-	assocstrAppID            = 22 // ASSOCSTR_APPID from shlwapi.h
-)
 
 func assocQueryString(str uint32, assoc string) (string, error) {
 	var buf [4096]uint16
