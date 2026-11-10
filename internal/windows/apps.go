@@ -49,6 +49,10 @@ func (b *Backend) Applications() ([]platform.Application, error) {
 	return apps, err
 }
 
+func (b *Backend) DefaultApp(url string) (platform.Application, error) {
+	return b.Shell().DefaultApp(url)
+}
+
 func withCOM(fn func() error) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()

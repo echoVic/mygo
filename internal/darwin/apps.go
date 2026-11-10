@@ -90,5 +90,9 @@ func (b *Backend) Applications() ([]platform.Application, error) {
 	return apps, nil
 }
 
+func (b *Backend) DefaultApp(url string) (platform.Application, error) {
+	return b.Shell().DefaultApp(url)
+}
+
 // OpenApplication starts an app, or brings it to the front.
 func (s shell) OpenApplication(path string) error { return s.OpenPath(path) }

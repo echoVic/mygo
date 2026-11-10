@@ -99,6 +99,10 @@ type Backend interface {
 	// Unlike other methods it may be called from any goroutine once Init
 	// returned: it reads the disk, which the core does off the main thread.
 	Applications() ([]Application, error)
+	// DefaultApp returns the application the system would use to open url.
+	// Like Applications, it may be called from any goroutine once Init
+	// returned: it reads system associations off the main thread.
+	DefaultApp(url string) (Application, error)
 
 	// NewFileWatch starts watching files, with no target yet. notify is
 	// called on a goroutine of the backend, one notice at a time.
