@@ -122,25 +122,24 @@ func chain(n int) string {
 	return strings.Join(layers, ",")
 }
 
-// Load resolves the links: what names no layer, names several, or leads
-// back to the layer that has it is an error; so is a chain longer than
-// maxParentDepth.
+// Load resolves the links: what names several layers, or leads back to
+// the layer that has it, is an error; so is a chain longer than
+// maxParentDepth. A link naming no layer is no link
+// (TestParentNamingNoLayerIsIgnored).
 func TestLoadRejectsBrokenParentLinks(t *testing.T) {
 	load := func(layers string) error {
 		_, err := Load([]byte(`{"w":100,"h":80,"fr":10,"ip":0,"op":20,"layers":[` + layers + `]}`))
 		return err
 	}
 	for name, tc := range map[string]struct{ layers, want string }{
-		"dangling":       {`{"ty":4,"parent":7,` + square + `}`, "parent 7: no layer has ind 7"},
-		"self":           {`{"ty":4,"ind":1,"parent":1,` + square + `}`, "parent links form a cycle"},
-		"two":            {`{"ty":4,"ind":1,"parent":2,` + square + `},{"ty":4,"ind":2,"parent":1,` + square + `}`, "parent links form a cycle"},
-		"through nulls":  {`{"ty":4,"parent":1,` + square + `},{"ty":3,"ind":1,"parent":2},{"ty":3,"ind":2,"parent":1}`, "parent links form a cycle"},
-		"duplicate":      {`{"ty":4,"parent":1,` + square + `},{"ty":3,"ind":1},{"ty":4,"ind":1,` + square + `}`, "parent 1: 2 layers have ind 1"},
-		"too deep":       {chain(maxParentDepth + 1), fmt.Sprintf("parent chain is longer than %d layers", maxParentDepth)},
-		"string":         {`{"ty":4,"parent":"1",` + square + `},{"ty":3,"ind":1}`, "want a number"},
-		"fraction":       {`{"ty":4,"parent":1.5,` + square + `},{"ty":3,"ind":1}`, "want a whole number"},
-		"huge ind":       {`{"ty":4,` + square + `},{"ty":3,"ind":1e8}`, "outside ±1e+07"},
-		"hidden, broken": {`{"ty":4,"parent":1,` + square + `},{"ty":4,"hd":true,"ind":1,"parent":9}`, "parent 9: no layer has ind 9"},
+		"self":          {`{"ty":4,"ind":1,"parent":1,` + square + `}`, "parent links form a cycle"},
+		"two":           {`{"ty":4,"ind":1,"parent":2,` + square + `},{"ty":4,"ind":2,"parent":1,` + square + `}`, "parent links form a cycle"},
+		"through nulls": {`{"ty":4,"parent":1,` + square + `},{"ty":3,"ind":1,"parent":2},{"ty":3,"ind":2,"parent":1}`, "parent links form a cycle"},
+		"duplicate":     {`{"ty":4,"parent":1,` + square + `},{"ty":3,"ind":1},{"ty":4,"ind":1,` + square + `}`, "parent 1: 2 layers have ind 1"},
+		"too deep":      {chain(maxParentDepth + 1), fmt.Sprintf("parent chain is longer than %d layers", maxParentDepth)},
+		"string":        {`{"ty":4,"parent":"1",` + square + `},{"ty":3,"ind":1}`, "want a number"},
+		"fraction":      {`{"ty":4,"parent":1.5,` + square + `},{"ty":3,"ind":1}`, "want a whole number"},
+		"huge ind":      {`{"ty":4,` + square + `},{"ty":3,"ind":1e8}`, "outside ±1e+07"},
 	} {
 		if err := load(tc.layers); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: error %v, want %q", name, err, tc.want)
@@ -152,6 +151,8 @@ func TestLoadRejectsBrokenParentLinks(t *testing.T) {
 		"null parent":         `{"ty":4,"parent":null,` + square + `}`,
 		"whole float":         `{"ty":4,"parent":1.0,` + square + `},{"ty":3,"ind":1}`,
 		"unused broken links": `{"ty":4,` + square + `},{"ty":4,"hd":true,"ind":1,"parent":9},{"ty":3,"ind":2,"parent":2}`,
+		"dangling":            `{"ty":4,"parent":7,` + square + `}`,
+		"hidden, dangling":    `{"ty":4,"parent":1,` + square + `},{"ty":4,"hd":true,"ind":1,"parent":9}`,
 	} {
 		if err := load(layers); err != nil {
 			t.Errorf("%s: %v", name, err)
@@ -174,6 +175,7 @@ func TestNonDrawingParents(t *testing.T) {
 		"hidden text":  `{"ty":5,"hd":true,"ind":1,"ks":{"p":{"k":[20,0]}},"t":{"d":"anything"}}`,
 		"hidden image": `{"ty":2,"hd":true,"ind":1,"refId":"none","ks":{"p":{"k":[20,0]}},"masksProperties":[{}]}`,
 		"null":         `{"ty":3,"ind":1,"ks":{"p":{"k":[20,0]}},"masksProperties":[{"mode":"a"}],"hasMask":true,"ef":[{"ty":5}],"bm":3,"tt":1,"td":1,"tm":{"k":0},"shapes":[{"ty":"xx"}]}`,
+		"stretched":    `{"ty":3,"ind":1,"sr":2,"ks":{"p":{"k":[20,0]}}}`,
 	} {
 		a := mustLoad(t, child+`,`+parent)
 		if got := inkBounds(renderAt(a, 0)); got != image.Rect(20, 0, 30, 10) {
@@ -185,7 +187,6 @@ func TestNonDrawingParents(t *testing.T) {
 		"3D":           `{"ty":3,"ind":1,"ddd":1}`,
 		"rotation 3D":  `{"ty":5,"hd":true,"ind":1,"ks":{"rx":{"k":10}}}`,
 		"auto-orient":  `{"ty":3,"ind":1,"ao":1}`,
-		"stretch":      `{"ty":3,"ind":1,"sr":2}`,
 		"expression":   `{"ty":3,"ind":1,"ks":{"p":{"k":[0,0],"x":"wiggle(1,2)"}}}`,
 		"visible text": `{"ty":5,"ind":1}`,
 	} {

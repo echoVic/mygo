@@ -24,6 +24,22 @@ const maxGroupDepth = 32
 // links, which bounds the work of Draw for each layer.
 const maxParentDepth = 32
 
+// maxPrecompDepth is how deep precompositions may nest: the root
+// composition is at depth 0, a precomposition in it at 1. Of lottie-ios's
+// 189 samples, the deepest nest 4 deep.
+const maxPrecompDepth = 16
+
+// maxLayers and maxShapes bound a frame's work: how many layers a
+// composition draws, or places, and how many shape items (geometry,
+// styles, trims and groups) they hold, a precomposition's counted again
+// for each layer that shows it. Without them, an asset shown twice in an
+// asset shown twice, and so on, would draw 2^n layers from a few
+// kilobytes. Of lottie-ios's 189 samples, the most expand to 1,139 layers.
+const (
+	maxLayers = 10_000
+	maxShapes = 1 << 18
+)
+
 // maxTrims is how many trims may cut one shape, one after the other,
 // and maxStyles how many styles may paint one shape or group: a style
 // paints all that is before it in its group, and without a bound, n
@@ -138,7 +154,7 @@ func present(raw json.RawMessage) bool {
 // plausible but wrong image.
 func (l *rawLayer) unsupported(ty int) error {
 	switch {
-	case ty != shapeLayer && ty != solidLayer:
+	case ty != shapeLayer && ty != solidLayer && ty != precompLayer:
 		if ty >= 0 && ty < len(layerTypes) && layerTypes[ty] != "" {
 			return fmt.Errorf("unsupported %s layer (ty %d)", layerTypes[ty], ty)
 		}
@@ -153,7 +169,7 @@ func (l *rawLayer) unsupported(ty int) error {
 		return fmt.Errorf("unsupported masks")
 	case present(l.Effects):
 		return fmt.Errorf("unsupported effects")
-	case present(l.TimeRemap):
+	case present(l.TimeRemap) && ty != precompLayer:
 		return fmt.Errorf("unsupported time remapping")
 	}
 	return l.rawPlacement.unsupported()
@@ -162,16 +178,17 @@ func (l *rawLayer) unsupported(ty int) error {
 // unsupported rejects the controls outside the subset that change where a
 // layer is, and so where its children are, whether it draws or not.
 // What else a layer carries, masks, effects, mattes, changes only how it
-// draws itself: a layer that only positions others ignores them.
+// draws itself: a layer that only positions others ignores them. A time
+// stretch (sr) changes only what a precomposition shows (see
+// parsePrecomp): on other layers lottie-web and lottie-ios ignore it, as
+// Load does, exporters writing their keyframes and in and out points in
+// the composition's frames, stretched.
 func (l *rawPlacement) unsupported() error {
 	if _, ok := enum(l.DDD, 1); !ok {
 		return fmt.Errorf("unsupported 3D layer (ddd %s)", l.DDD)
 	}
-	switch {
-	case l.AutoOrient != 0:
+	if l.AutoOrient != 0 {
 		return fmt.Errorf("unsupported auto-orient (ao)")
-	case l.Stretch != nil && *l.Stretch != 1:
-		return fmt.Errorf("unsupported layer time stretch")
 	}
 	return nil
 }
@@ -179,7 +196,7 @@ func (l *rawPlacement) unsupported() error {
 // layerTypes and shapeTypes name the kinds of layers (ty) and shape items
 // (ty) that Load rejects, for its errors.
 var (
-	layerTypes = [...]string{0: "precomposition", 2: "image", 5: "text", 6: "audio", 13: "camera"}
+	layerTypes = [...]string{2: "image", 5: "text", 6: "audio", 13: "camera"}
 	shapeTypes = map[string]string{
 		"gf": "gradient fill", "gs": "gradient stroke", "rp": "repeater",
 		"mm": "merge paths", "rd": "rounded corners", "sr": "polystar", "pb": "pucker and bloat",

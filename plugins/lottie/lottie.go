@@ -16,11 +16,13 @@
 //
 // The subset is shape layers, of paths, rectangles and ellipses, cut by
 // trim paths, with solid fills and strokes, each painting the shapes
-// before it in its group, nested groups' too, solid layers, and null
-// layers, under 2D transforms and the transforms of the layers they are
-// parented to. Their properties are static or keyframed with Bézier
-// easing, per component where a value has several, and positions move
-// along curved motion paths. Load reports anything else that would change
+// before it in its group, nested groups' too, solid layers,
+// precomposition layers, which show a composition of the document's
+// assets in their own time, clipped to their rectangle, and null layers,
+// under 2D transforms and the transforms of the layers they are parented
+// to. Their properties are static or keyframed with Bézier easing, per
+// component where a value has several, and positions move along curved
+// motion paths. Load reports anything else that would change
 // the picture as an error rather than draw it wrong; the plugin's guide
 // (docs/plugins/lottie.md) lists what it accepts.
 package lottie
@@ -58,8 +60,8 @@ func (a *Animation) Duration() time.Duration {
 
 // Load decodes a Lottie composition. It accepts shape layers with paths,
 // rectangles, ellipses, trim paths, solid fills, solid strokes and 2D
-// transforms, solid layers, and null layers and parent links that place
-// them.
+// transforms, solid layers, precomposition layers of the document's
+// assets, and null layers and parent links that place them.
 func Load(data []byte) (*Animation, error) {
 	var raw struct {
 		W      num               `json:"w"`
@@ -68,6 +70,7 @@ func Load(data []byte) (*Animation, error) {
 		Ip     num               `json:"ip"`
 		Op     num               `json:"op"`
 		Layers []json.RawMessage `json:"layers"`
+		Assets json.RawMessage   `json:"assets"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("lottie: decode composition: %w", err)
@@ -87,10 +90,12 @@ func Load(data []byte) (*Animation, error) {
 	}
 	w, h := int(raw.W), int(raw.H)
 	anim := &Animation{width: w, height: h, frameRate: float32(raw.Fr), Width: w, Height: h, FrameRate: float32(raw.Fr), inPoint: float32(raw.Ip), outPoint: float32(raw.Op)}
-	var err error
-	if anim.composition, err = parseComposition(raw.Layers); err != nil {
+	d := &document{frameRate: float32(raw.Fr), assets: raw.Assets}
+	c, err := d.parseComposition(raw.Layers, 0)
+	if err != nil {
 		return nil, fmt.Errorf("lottie: %w", err)
 	}
+	anim.composition = *c
 	return anim, nil
 }
 
@@ -143,6 +148,7 @@ func parseLayerShapes(items []rawShape, sh *shapes) error {
 		return err
 	}
 	sh.items = []item{{group: root}}
+	sh.size = sp.items + len(sp.painted) + len(sh.trims)
 	trims := make([]span, len(sh.trims))
 	for i, t := range sh.trims {
 		trims[i] = span{t.lo, t.hi}
@@ -250,7 +256,8 @@ func (sp *shapeParser) parseGroup(items []rawShape, depth int) (*group, error) {
 
 // parseGeometry reads a path, rectangle or ellipse. A rectangle or an
 // ellipse runs clockwise (d 1 or 2, or none, as lottie-ios has it) or
-// reversed (d 3); a path as it is (d 0 to 2, or none).
+// reversed (d 3); a path in the order of its vertices, whatever its d, 0
+// to 3, which lottie-web and lottie-ios ignore.
 func parseGeometry(it *rawShape) (geometry, error) {
 	d, ok := enum(it.D, 4)
 	if !ok {
@@ -258,9 +265,6 @@ func parseGeometry(it *rawShape) (geometry, error) {
 	}
 	reversed := d == 3
 	if it.Type == "sh" {
-		if reversed {
-			return nil, fmt.Errorf("unsupported path direction %s", it.D)
-		}
 		path, err := parsePath(it.Path)
 		return pathShape{path}, err
 	}

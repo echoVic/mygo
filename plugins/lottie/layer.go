@@ -11,24 +11,33 @@ import (
 
 // The types of layers (ty) that the subset draws, or that place others.
 const (
-	solidLayer = 1
-	nullLayer  = 3
-	shapeLayer = 4
+	precompLayer = 0
+	solidLayer   = 1
+	nullLayer    = 3
+	shapeLayer   = 4
 )
 
 // composition is a list of layers, the first on top, with their parent
-// links resolved: what an Animation draws, and what a precomposition's
-// layer would draw, under that layer's transform and in its own time.
+// links resolved: what an Animation draws, and what a precomposition
+// layer draws, under that layer's transform and in its own time.
 type composition struct {
 	layers []layer
+	// layerCount and shapeCount are how many layers it has and how many
+	// shape items they hold, its precompositions' counted again for each
+	// layer that shows them; depth is how deep precompositions nest in
+	// it, 0 without any. Load bounds them (maxLayers, maxShapes,
+	// maxPrecompDepth).
+	layerCount, shapeCount, depth int
 }
 
 // layer is a layer that draws, or that places one that does: its
-// transform, and what it draws under it, a shape layer's shapes or a
-// solid's rectangle, from its in point until its out point, in the
-// composition's frames.
+// transform, and what it draws under it, a shape layer's shapes, a
+// solid's rectangle or a precomposition, from its in point until its out
+// point, in the composition's frames.
 type layer struct {
 	shapes
+	// precomp is what a precomposition layer draws, nil for other layers.
+	precomp *precomp
 	// parent is the index in the composition of the layer whose
 	// transform this one's is inside, -1 for none.
 	parent            int
@@ -87,17 +96,36 @@ type rawLayer struct {
 	Blend       float64         `json:"bm"`
 	Masks       json.RawMessage `json:"masksProperties"`
 	Effects     json.RawMessage `json:"ef"`
-	TimeRemap   json.RawMessage `json:"tm"`
-	// A layer's start time (st) offsets the frames of what a precomp
-	// shows, which the subset rejects; the keyframes and in and out
-	// points of other layers are in composition frames, as lottie-web
-	// reads them, so Load ignores it.
+	// A precomposition's time remapping; see parsePrecomp.
+	TimeRemap json.RawMessage `json:"tm"`
+	// A layer's start time (st) offsets the frames of what a
+	// precomposition shows (see parsePrecomp); the keyframes and in and
+	// out points of every layer are in its composition's frames, as
+	// lottie-web reads them, the start time cancelling out, so Load
+	// ignores it on other layers.
 }
 
-// parseComposition decodes a list of layers. It reads in full the layers
-// that draw, and the transforms of those that place them, through parent
-// links; the others it skips, whatever they contain.
-func parseComposition(raws []json.RawMessage) (composition, error) {
+// document is what Load reads compositions from: the root composition's
+// frame rate, its assets, and the precompositions it has read of them,
+// which every layer that shows one shares.
+type document struct {
+	frameRate float32
+	// assets is the document's assets as written, which assetData
+	// indexes by id the first time a precomposition layer looks one up.
+	assets json.RawMessage
+	list   []json.RawMessage
+	ids    map[string][]int
+	read   map[string]*composition
+	// reading is the ids of the precompositions being read, around the
+	// one being read now.
+	reading map[string]bool
+}
+
+// parseComposition decodes a list of layers, of the composition depth
+// precompositions deep. It reads in full the layers that draw, and the
+// transforms of those that place them, through parent links; the others
+// it skips, whatever they contain.
+func (d *document) parseComposition(raws []json.RawMessage, depth int) (*composition, error) {
 	headers := make([]rawHeader, len(raws))
 	drawn := make([]bool, len(raws))
 	for i, data := range raws {
@@ -110,7 +138,7 @@ func parseComposition(raws []json.RawMessage) (composition, error) {
 			drawn[i], err = h.draws()
 		}
 		if err != nil {
-			return composition{}, fmt.Errorf("layer %d: %w", i, err)
+			return nil, fmt.Errorf("layer %d: %w", i, err)
 		}
 	}
 	layers := make([]layer, len(raws))
@@ -119,17 +147,17 @@ func parseComposition(raws []json.RawMessage) (composition, error) {
 			continue
 		}
 		var err error
-		if layers[i], err = parseLayer(data, &headers[i]); err != nil {
-			return composition{}, fmt.Errorf("layer %d: %w", i, err)
+		if layers[i], err = d.parseLayer(data, &headers[i], depth); err != nil {
+			return nil, fmt.Errorf("layer %d: %w", i, err)
 		}
 	}
 	parents, err := resolveParents(headers, drawn)
 	if err != nil {
-		return composition{}, err
+		return nil, err
 	}
 	// The layers that draw, and their ancestors, keep their order;
 	// index maps a layer's place in the list to its place in theirs.
-	var c composition
+	c := &composition{}
 	index := make([]int, len(raws))
 	for i, data := range raws {
 		if parents[i] == unplaced {
@@ -137,7 +165,7 @@ func parseComposition(raws []json.RawMessage) (composition, error) {
 		}
 		if !drawn[i] {
 			if layers[i], err = parsePlacement(data); err != nil {
-				return composition{}, fmt.Errorf("layer %d: %w", i, err)
+				return nil, fmt.Errorf("layer %d: %w", i, err)
 			}
 		}
 		index[i] = len(c.layers)
@@ -148,7 +176,35 @@ func parseComposition(raws []json.RawMessage) (composition, error) {
 			c.layers[index[i]].parent = index[p]
 		}
 	}
-	return c, nil
+	return c, c.count(depth)
+}
+
+// count counts the layers of c and their shapes, those of each
+// precomposition again for every layer that shows it, and how deep
+// precompositions nest in it, which is depth deep itself; it reports
+// those beyond the bounds. A precomposition's counts are its own, made
+// once, so that counting takes no longer than reading the document,
+// however many times a frame would draw what it holds.
+func (c *composition) count(depth int) error {
+	for i := range c.layers {
+		l := &c.layers[i]
+		c.layerCount++
+		c.shapeCount += l.size
+		if pc := l.precomp; pc != nil {
+			c.layerCount += pc.comp.layerCount
+			c.shapeCount += pc.comp.shapeCount
+			c.depth = max(c.depth, pc.comp.depth+1)
+		}
+		switch {
+		case depth+c.depth > maxPrecompDepth:
+			return fmt.Errorf("precompositions nest deeper than %d", maxPrecompDepth)
+		case c.layerCount > maxLayers:
+			return fmt.Errorf("more than %d layers to draw, a precomposition's counted again for each layer that shows it", maxLayers)
+		case c.shapeCount > maxShapes:
+			return fmt.Errorf("more than %d shapes to draw, a precomposition's counted again for each layer that shows it", maxShapes)
+		}
+	}
+	return nil
 }
 
 // unplaced is the parent resolveParents gives a layer that neither draws
@@ -160,12 +216,13 @@ const (
 
 // resolveParents returns the index of each layer's parent, root for a
 // layer without one, unplaced for one that doesn't matter: neither draws
-// nor is an ancestor of one that does. A parent must name one layer, by
-// its ind, and the chains of links end, within maxParentDepth links.
-// lottie-web, which follows links as it builds its layers
-// (buildElementParenting in BaseRenderer.js), applies every layer of an
-// ind several have, one after the other, leaves a layer without a parent
-// when its names none, and recurses without end around a cycle.
+// nor is an ancestor of one that does. A parent names a layer by its ind;
+// one that names none is no parent, as lottie-web, which follows links as
+// it builds its layers (buildElementParenting in BaseRenderer.js), and
+// lottie-ios have it. One that names several layers is an error, as are
+// chains of links that don't end, within maxParentDepth links: lottie-web
+// applies every layer of an ind several have, one after the other, and
+// recurses without end around a cycle.
 func resolveParents(headers []rawHeader, drawn []bool) ([]int, error) {
 	byInd := map[int][]int{}
 	for i := range headers {
@@ -201,19 +258,19 @@ func resolveParents(headers []rawHeader, drawn []bool) ([]int, error) {
 			if err != nil {
 				return fmt.Errorf("layer %d: %w", cur, err)
 			}
-			if parent == nil {
+			var named []int
+			if parent != nil {
+				named = byInd[*parent]
+			}
+			if len(named) > 1 {
+				return fmt.Errorf("layer %d: parent %d: %d layers have ind %d", cur, *parent, len(named), *parent)
+			}
+			if len(named) == 0 {
 				parents[cur] = root
 				break
 			}
-			switch layers := byInd[*parent]; len(layers) {
-			case 0:
-				return fmt.Errorf("layer %d: parent %d: no layer has ind %d", cur, *parent, *parent)
-			case 1:
-				parents[cur] = layers[0]
-				cur = layers[0]
-			default:
-				return fmt.Errorf("layer %d: parent %d: %d layers have ind %d", cur, *parent, len(layers), *parent)
-			}
+			parents[cur] = named[0]
+			cur = named[0]
 		}
 		for j := len(path) - 1; j >= 0; j-- {
 			depth++
@@ -239,9 +296,10 @@ func resolveParents(headers []rawHeader, drawn []bool) ([]int, error) {
 	return parents, nil
 }
 
-// parseLayer decodes a layer that draws: a shape or solid layer, its
+// parseLayer decodes a layer that draws, of a composition depth
+// precompositions deep: a shape, solid or precomposition layer, its
 // transform and its in and out points.
-func parseLayer(data json.RawMessage, h *rawHeader) (layer, error) {
+func (d *document) parseLayer(data json.RawMessage, h *rawHeader, depth int) (layer, error) {
 	ty, err := optional("ty", h.Ty)
 	if err != nil {
 		return layer{}, err
@@ -267,9 +325,16 @@ func parseLayer(data json.RawMessage, h *rawHeader) (layer, error) {
 	if raw.Out != nil {
 		l.outPoint = float32(*raw.Out)
 	}
-	if *ty == solidLayer {
+	switch *ty {
+	case precompLayer:
+		l.precomp, err = d.parsePrecomp(data, &raw, depth)
+		if err != nil {
+			return layer{}, err
+		}
+		return l, nil
+	case solidLayer:
 		err = raw.parseSolid(&l.shapes)
-	} else {
+	default:
 		err = parseLayerShapes(raw.Shapes, &l.shapes)
 	}
 	if err != nil {
@@ -320,6 +385,7 @@ func (raw *rawLayer) parseSolid(sh *shapes) error {
 			size:     property[point]{static: point{w, h}},
 		}}
 		sh.items = []item{{geometry: 0}, {style: &fill{rule: ui.NonZero, color: property[color]{static: c}, opacity: property[float32]{static: 100}}}}
+		sh.size = 2
 	}
 	return nil
 }
@@ -353,11 +419,12 @@ func solidColor(raw json.RawMessage) (color, error) {
 	return color{channel(0), channel(1), channel(2), 1}, nil
 }
 
-// draw draws the composition at frame, its layers from the last to the
-// first, under m, which maps its coordinates into the painter's, with
-// alpha. Each layer that draws is shown inside its parents' transforms,
-// sampled at the same frame, but only its own in and out points and
-// opacity decide whether and how it shows, as in After Effects.
+// draw draws the composition at frame, of its own, its layers from the
+// last to the first, under m, which maps its coordinates into the
+// painter's, with alpha. Each layer that draws is shown inside its
+// parents' transforms, sampled at the same frame, but only its own in and
+// out points and opacity decide whether and how it shows, as in After
+// Effects.
 func (c *composition) draw(p *ui.Painter, path *ui.Path, m affine, frame, alpha float32) {
 	for i := len(c.layers) - 1; i >= 0; i-- {
 		if l := &c.layers[i]; l.drawn && frame >= l.inPoint && frame < l.outPoint {

@@ -28,6 +28,9 @@ type shapes struct {
 	moving []int
 	// animated reports whether outlines changes with the frame.
 	animated bool
+	// size is how many items the shapes are, which Load counts to bound
+	// a frame's work (maxShapes).
+	size int
 }
 
 // group is a shape group: its items, in the order they are listed, the

@@ -1,4 +1,6 @@
-// Lottie shows a shape-only animation with native playback controls.
+// Lottie shows an animation of shape layers, a null that they are
+// parented to and a precomposition shown twice, with native playback
+// controls.
 //
 //	go run ./examples/lottie
 package main
