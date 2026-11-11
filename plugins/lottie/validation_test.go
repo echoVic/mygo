@@ -22,9 +22,6 @@ func TestLoadRejectsUnsupportedControls(t *testing.T) {
 		{"split-rotation", `{"ty":4,"ks":{"r":{"s":true,"k":0}}}`},
 		{"split-position-expression", `{"ty":4,"ks":{"p":{"s":true,"x":{"k":0,"x":"time"},"y":{"k":0}}}}`},
 		{"scalar-tangents", `{"ty":4,"ks":{"r":{"a":1,"k":[{"t":0,"s":[0],"to":[1],"ti":[0]},{"t":10,"s":[10]}]}}}`},
-		{"multiple-fills", `{"ty":4,"shapes":[` + redRect + `,{"ty":"fl","c":{"k":[0,0,1]}}]}`},
-		{"interleaved-styles", `{"ty":4,"shapes":[` + redRect + `,{"ty":"el","s":{"k":[10,10]}}]}`},
-		{"group-style-inheritance", `{"ty":4,"shapes":[{"ty":"gr","it":[]},{"ty":"fl","c":{"k":[1,0,0]}}]}`},
 		{"dash", `{"ty":4,"shapes":[{"ty":"st","d":[{"n":"d","v":{"k":4}}]}]}`},
 	}
 	for _, tt := range tests {
@@ -92,7 +89,7 @@ func TestNeutralExporterControls(t *testing.T) {
 }
 
 func TestRejectUnsupportedShapeControls(t *testing.T) {
-	for _, data := range []string{`{"ty":4,"shapes":[{"ty":"rc","d":3}]}`, `{"ty":4,"shapes":[{"ty":"tr"},{"ty":"tr"}]}`} {
+	for _, data := range []string{`{"ty":4,"shapes":[{"ty":"rc","d":4}]}`, `{"ty":4,"shapes":[{"ty":"tr"},{"ty":"tr"}]}`} {
 		if _, err := Load([]byte(`{"w":100,"h":80,"fr":10,"ip":0,"op":20,"layers":[` + data + `]}`)); err == nil {
 			t.Fatalf("silently accepted unsupported control: %s", data)
 		}

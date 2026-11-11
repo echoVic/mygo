@@ -223,12 +223,12 @@ func TestSpatialTangentsOnTransformsAndShapes(t *testing.T) {
 		t.Errorf("layer along its arch at frame 5: ink %v, want (45,45)-(55,55)", got)
 	}
 	a = mustLoad(t, `{"ty":4,"ks":{"a":`+arch+`},"shapes":[{"ty":"gr","it":[{"ty":"rc","p":`+arch+`,"s":{"k":[10,10]}},{"ty":"el","p":`+arch+`,"s":{"k":[10,10]}},{"ty":"fl","c":{"k":[1,0,0]}},{"ty":"tr","p":`+arch+`}]}]}`)
-	shapes := a.layers[0].groups[0].groups[0]
+	group := a.layers[0].items[0].group.items[0].group
 	for name, p := range map[string]property[point]{
 		"anchor":    a.layers[0].transform.anchor,
-		"group":     shapes.transform.position,
-		"rectangle": shapes.geometry[0].(rectShape).position,
-		"ellipse":   shapes.geometry[1].(ellipseShape).position,
+		"group":     group.transform.position,
+		"rectangle": a.layers[0].geometry[0].(rectShape).position,
+		"ellipse":   a.layers[0].geometry[1].(ellipseShape).position,
 	} {
 		if got := p.sample(5); !near(got, point{50, 50}, 0.01) {
 			t.Errorf("%s at frame 5 = %v, want the arch's top, (50,50)", name, got)

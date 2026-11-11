@@ -55,7 +55,7 @@ func TestWholeFloatsAsIntegers(t *testing.T) {
 	if got := renderAt(a, 5).RGBAAt(50, 40); got.R != 255 || got.G != 0 {
 		t.Errorf("held opacity: center %v, want red", got)
 	}
-	if s := a.layers[0].groups[0].styles[1].(*stroke); s.cap != lineCaps[2] || s.join != lineJoins[3] {
+	if s := a.layers[0].items[0].group.items[2].style.(*stroke); s.cap != lineCaps[2] || s.join != lineJoins[3] {
 		t.Errorf("stroke cap %v, join %v; want round and bevel", s.cap, s.join)
 	}
 	for name, layer := range map[string]string{
