@@ -75,7 +75,8 @@ func TestLoadCompositionAndProperties(t *testing.T) {
 	if got := layer.opacity.sample(5); got != 75 {
 		t.Fatalf("opacity at frame 5 = %v, want 75", got)
 	}
-	group := layer.groups[0]
+	// The synthetic root preserves transforms around nested shape groups.
+	group := layer.groups[0].groups[0]
 	if len(group.paths) != 1 || len(group.rects) != 1 || len(group.ellipses) != 1 {
 		t.Fatalf("group geometry = paths %d, rects %d, ellipses %d; want 1 each", len(group.paths), len(group.rects), len(group.ellipses))
 	}

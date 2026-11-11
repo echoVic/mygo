@@ -7,15 +7,15 @@ import (
 )
 
 func (a *Animation) drawAt(p *ui.Painter, bounds ui.Rect, frame float32) {
-	if a == nil || p == nil || a.Width <= 0 || a.Height <= 0 {
+	if a == nil || p == nil || a.width <= 0 || a.height <= 0 {
 		return
 	}
-	scale := min(bounds.W/float32(a.Width), bounds.H/float32(a.Height))
+	scale := min(bounds.W/float32(a.width), bounds.H/float32(a.height))
 	if scale <= 0 {
 		return
 	}
-	ox := bounds.X + (bounds.W-float32(a.Width)*scale)/2
-	oy := bounds.Y + (bounds.H-float32(a.Height)*scale)/2
+	ox := bounds.X + (bounds.W-float32(a.width)*scale)/2
+	oy := bounds.Y + (bounds.H-float32(a.height)*scale)/2
 	viewport := ui.Scaling(scale, scale).Then(ui.Translation(ox, oy))
 	p.Transform(viewport, 0, 0, func() {
 		for i := len(a.layers) - 1; i >= 0; i-- {
@@ -51,44 +51,56 @@ func drawGroup(p *ui.Painter, group group, frame, parentAlpha float32) {
 		if len(group.strokes) > 0 {
 			stroke = &group.strokes[0]
 		}
+		path := new(ui.Path)
 		for _, shape := range group.paths {
-			drawPath(p, shape.path.sample(frame), fill, stroke, frame, alpha)
+			appendPathData(path, shape.path.sample(frame))
 		}
 		for _, shape := range group.rects {
-			drawPath(p, rectPath(shape.position.sample(frame), shape.size.sample(frame), shape.radius.sample(frame)), fill, stroke, frame, alpha)
+			appendPathData(path, rectPath(shape.position.sample(frame), shape.size.sample(frame), shape.radius.sample(frame)))
 		}
 		for _, shape := range group.ellipses {
-			drawPath(p, ellipsePath(shape.position.sample(frame), shape.size.sample(frame)), fill, stroke, frame, alpha)
+			appendPathData(path, ellipsePath(shape.position.sample(frame), shape.size.sample(frame)))
 		}
+		drawPath(p, path, fill, stroke, frame, alpha, group.strokeFirst)
+
 		for i := len(group.groups) - 1; i >= 0; i-- {
 			drawGroup(p, group.groups[i], frame, alpha)
 		}
 	})
 }
 
-func drawPath(p *ui.Painter, data pathData, fill *fillShape, stroke *strokeShape, frame float32, alpha float32) {
-	path := pathFromData(data)
-	if path == nil {
-		return
-	}
-	if fill != nil {
-		c := fill.color.sample(frame)
-		p.FillPath(path, c.ui(alpha*clamp(fill.opacity.sample(frame)/100, 0, 1)))
-	}
-	if stroke != nil {
-		c := stroke.color.sample(frame)
-		width := stroke.width.sample(frame)
-		if width > 0 {
-			p.StrokePath(path, width, c.ui(alpha*clamp(stroke.opacity.sample(frame)/100, 0, 1)))
+func drawPath(p *ui.Painter, path *ui.Path, fill *fillShape, stroke *strokeShape, frame, alpha float32, strokeFirst bool) {
+	fillIt := func() {
+		if fill != nil {
+			if fill.rule == 2 {
+				path.FillRule(ui.EvenOdd)
+			}
+			p.FillPath(path, fill.color.sample(frame).ui(alpha*clamp(fill.opacity.sample(frame)/100, 0, 1)))
 		}
+	}
+	strokeIt := func() {
+		if stroke != nil {
+			width := stroke.width.sample(frame)
+			if width > 0 {
+				path.Cap([]ui.LineCap{ui.ButtCap, ui.ButtCap, ui.RoundCap, ui.SquareCap}[stroke.cap]).Join([]ui.LineJoin{ui.MiterJoin, ui.MiterJoin, ui.RoundJoin, ui.BevelJoin}[stroke.join]).MiterLimit(stroke.miter)
+				p.StrokePath(path, width, stroke.color.sample(frame).ui(alpha*clamp(stroke.opacity.sample(frame)/100, 0, 1)))
+			}
+		}
+	}
+	if strokeFirst {
+		strokeIt()
+		fillIt()
+	} else {
+		fillIt()
+		strokeIt()
 	}
 }
 
-func pathFromData(data pathData) *ui.Path {
+func appendPathData(path *ui.Path, data pathData) {
 	if len(data.Vertices) == 0 || len(data.In) != len(data.Vertices) || len(data.Out) != len(data.Vertices) {
-		return nil
+		return
 	}
-	path := new(ui.Path).MoveTo(data.Vertices[0].X, data.Vertices[0].Y)
+	path.MoveTo(data.Vertices[0].X, data.Vertices[0].Y)
 	for i := 1; i < len(data.Vertices); i++ {
 		from, to := data.Vertices[i-1], data.Vertices[i]
 		cp1 := point{X: from.X + data.Out[i-1].X, Y: from.Y + data.Out[i-1].Y}
@@ -101,7 +113,6 @@ func pathFromData(data pathData) *ui.Path {
 		cp2 := point{X: first.X + data.In[0].X, Y: first.Y + data.In[0].Y}
 		path.CubeTo(cp1.X, cp1.Y, cp2.X, cp2.Y, first.X, first.Y).Close()
 	}
-	return path
 }
 
 func rectPath(position, size point, radius float32) pathData {
@@ -133,11 +144,4 @@ func ellipsePath(position, size point) pathData {
 		Out:      []point{{X: 0, Y: ry * k}, {X: -rx * k, Y: 0}, {X: 0, Y: -ry * k}, {X: rx * k, Y: 0}},
 		Closed:   true,
 	}
-}
-
-func min(a, b float32) float32 {
-	if a < b {
-		return a
-	}
-	return b
 }

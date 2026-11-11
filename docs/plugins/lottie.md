@@ -1,0 +1,118 @@
+# Lottie
+
+The Go-only `plugins/lottie` package plays a bounded subset of Lottie JSON
+in native UI. It renders vector shapes through MyGo's public painter;
+it does not need a JavaScript runtime, an npm package, a native library,
+or registration with `mygo.Use`.
+
+## Load and draw
+
+Load once, keep one player per view, and draw it in an element's paint
+callback. The player starts automatically. Bounds use DIPs; the
+composition fits inside them with its aspect ratio preserved and is centered.
+
+```go
+import (
+    _ "embed"
+
+    "github.com/egoist/mygo/plugins/lottie"
+    "github.com/egoist/mygo/ui"
+)
+
+//go:embed success.json
+var data []byte
+
+// During initialization; handle the error before showing the view:
+animation, err := lottie.Load(data)
+if err != nil {
+    return err
+}
+player := animation.NewPlayer(lottie.PlayerOptions{Loop: true, Speed: 1})
+
+// Inside the view, using that same player:
+ui.Box(c).Size(200, 200).Label("Saved").Draw(player.Draw)
+```
+
+`Load` owns the decoded data. An animation can be shared by several
+players, each with its own clock. `Width`, `Height`, `FrameRate`, and
+`Duration()` describe the composition. Editing the exported metadata
+does not change playback. Player methods are safe to call concurrently;
+use `Draw` from one view's paint callback and do not retain its painter.
+A zero-value player draws nothing.
+
+## Playback
+
+`NewPlayer()` plays once. `NewPlayer(lottie.PlayerOptions{Loop: true})`
+repeats. `Speed` is a positive multiplier; zero, negative and non-finite
+values use 1. `Duration()` returns composition time, independent of speed.
+
+| Method | Behavior |
+| --- | --- |
+| `Play()` | Resume from the current position. At the end of a one-shot animation, reset or seek before playing again. |
+| `Pause()` | Hold the last painted position. |
+| `Seek(time.Duration)` | Choose a composition time, clamped between zero and duration. Keep the playing or paused state. |
+| `Reset()` | Seek to zero, keeping the playing or paused state. |
+| `Draw(*ui.Painter, ui.Rect)` | Draw the current frame and request another paint while playback is active. |
+
+After changing a paused or completed player, request a view update so
+its paint callback runs again. For example, in a button handler:
+
+```go
+if ui.Button(c.Key("replay"), "Replay").Clicked() {
+    player.Reset()
+    player.Play()
+    c.Services().Invalidate()
+}
+```
+
+The clock comes from `Painter.Now()`. No timer or goroutine is started.
+Pause and seek establish a fresh clock anchor at the next paint, so time
+spent paused does not advance the animation. A one-shot player holds the
+last frame and stops requesting frames. With reduced motion enabled,
+it draws the first frame and requests no animation frames. Give meaningful
+animations an accessible label and put essential state in text as well.
+
+## Supported JSON
+
+This first version is intended for simple shape assets. Exporting an
+arbitrary After Effects project is not sufficient to guarantee compatibility.
+`Load` reports an error for recognized features that change rendering but
+are outside the subset, with a layer/group/property context.
+
+| Area | Supported |
+| --- | --- |
+| Composition | Positive dimensions/frame rate, in/out points; layer visibility, start time and hidden flags. |
+| Layers | 2D shape layers (`ty: 4`). |
+| Geometry | Cubic Bezier paths, rounded rectangles, ellipses; compound paths with nonzero or even-odd fill. Rectangles/ellipses use default direction (`d: 1` or omitted). |
+| Styles | One solid fill and one solid stroke per group, with opacity, width, cap, join and miter limit. Styles follow their geometry; independently styled child groups may be nested. |
+| Transform | Anchor, position, scale, rotation and opacity on layers and nested groups. Static zero skew fields are accepted. |
+| Properties | Static and keyframed scalar, 2D point, color and path values; hold, linear and cubic temporal Bezier easing. Path morphs preserve vertex count and closed/open state. |
+
+Geometry shares its group's fill/stroke. Groups containing child groups
+must give each child its own styles; inherited parent styles, interleaved
+geometry/styles, multiple fills/strokes, and multiple transforms per group
+are rejected. Spatial position curves and component-specific easing are
+not supported; zero spatial tangents are accepted. Colors interpolate
+channel by channel in the JSON color space.
+
+Unsupported features include precompositions, images, text, solid/null
+layers, masks, mattes, blend modes, effects, expressions, 3D, parenting,
+time remapping/stretch, gradients, trim paths, repeaters and other shape
+operators. Reverse shape direction (`d: 3`) is rejected. Export paths
+with the intended vertex winding, or use even-odd compound fills.
+
+Opacity multiplies each primitive's alpha. Overlapping children or a
+fill and stroke in a translucent group can therefore look different from
+After Effects' isolated group compositing. This version does not allocate
+an offscreen layer to isolate group opacity. There is no claim of full
+Lottie conformance or measured coverage of real-world assets.
+
+## Example and tests
+
+Run `go run ./examples/lottie` for an original embedded orbit-badge
+animation with play, pause, reset and seek controls. The fixture is under
+the repository's license and uses no third-party artwork.
+
+`go test ./plugins/lottie` uses deterministic `ui.Tester` rendering and
+clock advancement to check pixels, timing, controls, reduced motion and
+validation. Native window behavior and GPU output require a desktop run.
