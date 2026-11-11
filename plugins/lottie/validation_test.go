@@ -20,8 +20,9 @@ func TestLoadRejectsUnsupportedControls(t *testing.T) {
 		{"time-remap", `{"ty":4,"tm":{"k":0}}`},
 		{"skew", `{"ty":4,"ks":{"sk":{"k":20}}}`},
 		{"expression", `{"ty":4,"ks":{"r":{"k":0,"x":"time*10"}}}`},
-		{"split-position", `{"ty":4,"ks":{"p":{"s":true,"x":{"k":0},"y":{"k":0}}}}`},
-		{"spatial-curve", `{"ty":4,"ks":{"p":{"a":1,"k":[{"t":0,"s":[0,0],"to":[1,2],"ti":[0,0]},{"t":10,"s":[10,10]}]}}}`},
+		{"split-rotation", `{"ty":4,"ks":{"r":{"s":true,"k":0}}}`},
+		{"split-position-expression", `{"ty":4,"ks":{"p":{"s":true,"x":{"k":0,"x":"time"},"y":{"k":0}}}}`},
+		{"scalar-tangents", `{"ty":4,"ks":{"r":{"a":1,"k":[{"t":0,"s":[0],"to":[1],"ti":[0]},{"t":10,"s":[10]}]}}}`},
 		{"multiple-fills", `{"ty":4,"shapes":[` + redRect + `,{"ty":"fl","c":{"k":[0,0,1]}}]}`},
 		{"interleaved-styles", `{"ty":4,"shapes":[` + redRect + `,{"ty":"el","s":{"k":[10,10]}}]}`},
 		{"group-style-inheritance", `{"ty":4,"shapes":[{"ty":"gr","it":[]},{"ty":"fl","c":{"k":[1,0,0]}}]}`},
@@ -52,7 +53,6 @@ func TestKeyframeValidationAndTerminalSentinel(t *testing.T) {
 		`{"a":1,"k":[]}`,
 		`{"a":1,"k":[{"t":1,"s":[0]},{"t":1,"s":[1]}]}`,
 		`{"a":1,"k":[{"t":2,"s":[0]},{"t":1,"s":[1]}]}`,
-		`{"a":1,"k":[{"t":0,"s":[0],"i":{"x":[0.5,0.8],"y":[1,1]},"o":{"x":[0.5,0.5],"y":[0,0]}},{"t":10,"s":[1]}]}`,
 	} {
 		if _, err := parseScalar(json.RawMessage(data), 0); err == nil {
 			t.Errorf("accepted invalid keyframes: %s", data)

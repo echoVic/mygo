@@ -23,6 +23,10 @@ type rawTransform struct {
 type transform struct {
 	anchor, position, scale property[point]
 	rotation, opacity       property[float32]
+	// x and y are the position's when it is split into them (p.s), each
+	// animated on its own.
+	x, y  property[float32]
+	split bool
 }
 
 // parseTransform decodes a transform, its missing properties neutral.
@@ -43,6 +47,12 @@ func parseTransform(raw rawTransform) (transform, error) {
 	}
 	var t transform
 	var err error
+	if t.split, err = t.parseSplit(raw.P); err != nil {
+		return transform{}, fmt.Errorf("position: %w", err)
+	}
+	if t.split {
+		raw.P = nil
+	}
 	for _, p := range []struct {
 		name string
 		dst  *property[point]
@@ -62,9 +72,42 @@ func parseTransform(raw rawTransform) (transform, error) {
 	return t, nil
 }
 
+// parseSplit decodes a position split into x and y (p.s), and reports
+// whether it is one. Its z is 3D's, which a 2D transform ignores, as it
+// does a position's third component.
+func (t *transform) parseSplit(data json.RawMessage) (bool, error) {
+	var split struct {
+		S       bool
+		X, Y, Z json.RawMessage
+	}
+	if len(data) == 0 || data[0] != '{' || json.Unmarshal(data, &split) != nil || !split.S {
+		return false, nil // not split, which parsePoint decodes or rejects
+	}
+	if !present(split.X) || !present(split.Y) {
+		return false, fmt.Errorf("split position without x and y")
+	}
+	var err error
+	if t.x, err = parseScalar(split.X, 0); err != nil {
+		return false, fmt.Errorf("x: %w", err)
+	}
+	if t.y, err = parseScalar(split.Y, 0); err != nil {
+		return false, fmt.Errorf("y: %w", err)
+	}
+	if _, err = parseScalar(split.Z, 0); err != nil {
+		return false, fmt.Errorf("z: %w", err)
+	}
+	return true, nil
+}
+
 // at returns the transform's matrix at frame.
 func (t transform) at(frame float32) affine {
-	anchor, position, scale := t.anchor.sample(frame), t.position.sample(frame), t.scale.sample(frame)
+	anchor, scale := t.anchor.sample(frame), t.scale.sample(frame)
+	var position point
+	if t.split {
+		position = point{t.x.sample(frame), t.y.sample(frame)}
+	} else {
+		position = t.position.sample(frame)
+	}
 	sin, cos := math.Sincos(float64(t.rotation.sample(frame)) * math.Pi / 180)
 	sx, sy := float64(scale.X)/100, float64(scale.Y)/100
 	m := affine{a: cos * sx, b: sin * sx, c: -sin * sy, d: cos * sy}
