@@ -14,13 +14,14 @@
 //	// In the view:
 //	ui.Box(c).Size(200, 200).Label("Saved").Draw(player.Draw)
 //
-// The subset is shape layers: paths, rectangles and ellipses with solid
-// fills and strokes, under 2D transforms, their properties static or
-// keyframed with Bézier easing, per component where a value has several,
-// and positions moving along curved motion paths. Load reports anything
-// else that would
-// change the picture as an error rather than draw it wrong; the plugin's
-// guide (docs/plugins/lottie.md) lists what it accepts.
+// The subset is shape layers, of paths, rectangles and ellipses with solid
+// fills and strokes, solid layers, and null layers, under 2D transforms
+// and the transforms of the layers they are parented to. Their properties
+// are static or keyframed with Bézier easing, per component where a value
+// has several, and positions move along curved motion paths. Load reports
+// anything else that would change the picture as an error rather than
+// draw it wrong; the plugin's guide (docs/plugins/lottie.md) lists what it
+// accepts.
 package lottie
 
 import (
@@ -42,14 +43,8 @@ type Animation struct {
 	frameRate     float32
 	inPoint       float32
 	outPoint      float32
-	layers        []layer
-}
-
-// layer is a shape layer: a group under the layer's transform, shown from
-// its in point until its out point, in composition frames.
-type layer struct {
-	group
-	inPoint, outPoint float32
+	// composition is its layers.
+	composition
 }
 
 // Duration returns the composition's playback duration.
@@ -60,8 +55,9 @@ func (a *Animation) Duration() time.Duration {
 	return time.Duration(math.Round((float64(a.outPoint) - float64(a.inPoint)) / float64(a.frameRate) * float64(time.Second)))
 }
 
-// Load decodes a Lottie composition. The MVP accepts shape layers with paths,
-// rectangles, ellipses, solid fills, solid strokes and 2D transforms.
+// Load decodes a Lottie composition. It accepts shape layers with paths,
+// rectangles, ellipses, solid fills, solid strokes and 2D transforms,
+// solid layers, and null layers and parent links that place them.
 func Load(data []byte) (*Animation, error) {
 	var raw struct {
 		W      num               `json:"w"`
@@ -75,7 +71,7 @@ func Load(data []byte) (*Animation, error) {
 		return nil, fmt.Errorf("lottie: decode composition: %w", err)
 	}
 	if !whole(raw.W) || !whole(raw.H) {
-		return nil, fmt.Errorf("lottie: composition width and height must be positive whole numbers")
+		return nil, fmt.Errorf("lottie: composition size %v×%v: width and height must be positive whole numbers", raw.W, raw.H)
 	}
 	if !(raw.Fr > 0) {
 		return nil, fmt.Errorf("lottie: frame rate must be positive")
@@ -89,19 +85,9 @@ func Load(data []byte) (*Animation, error) {
 	}
 	w, h := int(raw.W), int(raw.H)
 	anim := &Animation{width: w, height: h, frameRate: float32(raw.Fr), Width: w, Height: h, FrameRate: float32(raw.Fr), inPoint: float32(raw.Ip), outPoint: float32(raw.Op)}
-	for i, data := range raw.Layers {
-		var raw rawLayer
-		if err := json.Unmarshal(data, &raw); err != nil {
-			return nil, fmt.Errorf("lottie: layer %d: %w", i, err)
-		}
-		if raw.Hidden {
-			continue // never drawn, whatever it is
-		}
-		l, err := parseLayer(&raw)
-		if err != nil {
-			return nil, fmt.Errorf("lottie: layer %d: %w", i, err)
-		}
-		anim.layers = append(anim.layers, l)
+	var err error
+	if anim.composition, err = parseComposition(raw.Layers); err != nil {
+		return nil, fmt.Errorf("lottie: %w", err)
 	}
 	return anim, nil
 }
@@ -109,32 +95,6 @@ func Load(data []byte) (*Animation, error) {
 // whole reports whether n is a positive whole number, as a composition's
 // size must be, however it is written: 100 and 100.0 alike.
 func whole(n num) bool { return n > 0 && float32(math.Trunc(float64(n))) == float32(n) }
-
-// shapeLayer is the ty of a shape layer, the only kind the subset draws.
-const shapeLayer = 4
-
-type rawLayer struct {
-	Type    int          `json:"ty"`
-	DDD     int          `json:"ddd"`
-	Hidden  bool         `json:"hd"`
-	In      *num         `json:"ip"`
-	Out     *num         `json:"op"`
-	Stretch *num         `json:"sr"`
-	Ks      rawTransform `json:"ks"`
-	Shapes  []rawShape   `json:"shapes"`
-	// Controls outside the subset that change how a layer draws.
-	Matte       float64         `json:"tt"`
-	MatteSource float64         `json:"td"`
-	Blend       float64         `json:"bm"`
-	AutoOrient  float64         `json:"ao"`
-	Parent      json.RawMessage `json:"parent"`
-	Masks       json.RawMessage `json:"masksProperties"`
-	Effects     json.RawMessage `json:"ef"`
-	TimeRemap   json.RawMessage `json:"tm"`
-	// A layer's start time (st) offsets the frames of what a precomp
-	// shows, which the subset rejects; a shape layer's keyframes and in
-	// and out points are in composition frames, so Load ignores it.
-}
 
 // rawShape is a shape item with the fields of every type the subset reads,
 // so that Load decodes each item, and the groups nested in it, once. What
@@ -151,32 +111,10 @@ type rawShape struct {
 	Path   json.RawMessage `json:"ks"`
 	Color  json.RawMessage `json:"c"`
 	Width  json.RawMessage `json:"w"`
-	Cap    int             `json:"lc"`
-	Join   int             `json:"lj"`
+	Cap    json.RawMessage `json:"lc"`
+	Join   json.RawMessage `json:"lj"`
 	Miter  *num            `json:"ml"`
 	D      json.RawMessage `json:"d"`
-}
-
-func parseLayer(raw *rawLayer) (layer, error) {
-	if err := raw.unsupported(); err != nil {
-		return layer{}, err
-	}
-	tr, err := parseTransform(raw.Ks)
-	if err != nil {
-		return layer{}, err
-	}
-	shapes, err := parseGroup(raw.Shapes, 0)
-	if err != nil {
-		return layer{}, err
-	}
-	l := layer{group: group{transform: tr, groups: []group{shapes}}, inPoint: -math.MaxFloat32, outPoint: math.MaxFloat32}
-	if raw.In != nil {
-		l.inPoint = float32(*raw.In)
-	}
-	if raw.Out != nil {
-		l.outPoint = float32(*raw.Out)
-	}
-	return l, nil
 }
 
 // parseGroup reads a group's items, depth groups deep. Styles paint the
@@ -258,11 +196,8 @@ func parseGroup(items []rawShape, depth int) (group, error) {
 // parseGeometry reads a path, rectangle or ellipse, drawn in its default
 // direction (d 1, or none).
 func parseGeometry(it *rawShape) (geometry, error) {
-	var direction int
-	if len(it.D) > 0 {
-		if err := json.Unmarshal(it.D, &direction); err != nil || direction != 0 && direction != 1 {
-			return nil, fmt.Errorf("unsupported shape direction %s", it.D)
-		}
+	if _, ok := enum(it.D, 2); !ok {
+		return nil, fmt.Errorf("unsupported shape direction %s", it.D)
 	}
 	if it.Type == "sh" {
 		path, err := parsePath(it.Path)
@@ -305,11 +240,9 @@ func parseStyle(it *rawShape) (style, error) {
 		return nil, fmt.Errorf("opacity: %w", err)
 	}
 	if it.Type == "fl" {
-		var rule int
-		if len(it.R) > 0 {
-			if err := json.Unmarshal(it.R, &rule); err != nil || rule < 0 || rule >= len(fillRules) {
-				return nil, fmt.Errorf("unsupported fill rule %s", it.R)
-			}
+		rule, ok := enum(it.R, len(fillRules))
+		if !ok {
+			return nil, fmt.Errorf("unsupported fill rule %s", it.R)
 		}
 		return &fill{rule: fillRules[rule], color: c, opacity: o}, nil
 	}
@@ -320,14 +253,16 @@ func parseStyle(it *rawShape) (style, error) {
 	if err != nil {
 		return nil, fmt.Errorf("stroke width: %w", err)
 	}
-	if it.Cap < 0 || it.Cap >= len(lineCaps) || it.Join < 0 || it.Join >= len(lineJoins) {
-		return nil, fmt.Errorf("unsupported stroke cap or join")
+	lineCap, capOK := enum(it.Cap, len(lineCaps))
+	join, joinOK := enum(it.Join, len(lineJoins))
+	if !capOK || !joinOK {
+		return nil, fmt.Errorf("unsupported stroke cap %s or join %s", it.Cap, it.Join)
 	}
 	miter := float32(4) // Lottie's default, as SVG's
 	if it.Miter != nil {
 		miter = float32(*it.Miter)
 	}
-	return &stroke{cap: lineCaps[it.Cap], join: lineJoins[it.Join], miter: miter, color: c, opacity: o, width: w}, nil
+	return &stroke{cap: lineCaps[lineCap], join: lineJoins[join], miter: miter, color: c, opacity: o, width: w}, nil
 }
 
 func finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }

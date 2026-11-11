@@ -20,6 +20,10 @@ const maxMagnitude = 1e7
 // recursion of Load and Draw.
 const maxGroupDepth = 32
 
+// maxParentDepth is how many ancestors a layer may have, through parent
+// links, which bounds the work of Draw for each layer.
+const maxParentDepth = 32
+
 // num is a number of the JSON. Every number Load reads is one, so that the
 // bound is checked in this one place.
 type num float32
@@ -28,15 +32,68 @@ func (n *num) UnmarshalJSON(data []byte) error {
 	if string(data) == "null" {
 		return nil
 	}
-	v, err := strconv.ParseFloat(string(data), 64)
-	if err != nil && !errors.Is(err, strconv.ErrRange) {
-		return fmt.Errorf("want a number, got %.20s", data)
-	}
-	if !(math.Abs(v) <= maxMagnitude) {
-		return fmt.Errorf("number %s is outside ±%g", data, float64(maxMagnitude))
+	v, err := parseNumber(data)
+	if err != nil {
+		return err
 	}
 	*n = num(v)
 	return nil
+}
+
+// parseNumber reads a number of the JSON, within maxMagnitude.
+func parseNumber(data []byte) (float64, error) {
+	v, err := strconv.ParseFloat(string(data), 64)
+	if err != nil && !errors.Is(err, strconv.ErrRange) {
+		return 0, fmt.Errorf("want a number, got %.20s", data)
+	}
+	if !(math.Abs(v) <= maxMagnitude) {
+		return 0, fmt.Errorf("number %s is outside ±%g", data, float64(maxMagnitude))
+	}
+	return v, nil
+}
+
+// integer is a whole number of the JSON: a type, a flag, an index, a
+// choice among several. Some exporters write every number as a float, and
+// 4.0 is 4, as it is in JavaScript; 4.5 is an error.
+type integer int
+
+func (n *integer) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		return nil
+	}
+	v, err := parseNumber(data)
+	if err != nil {
+		return err
+	}
+	if v != math.Trunc(v) {
+		return fmt.Errorf("want a whole number, got %.20s", data)
+	}
+	*n = integer(v)
+	return nil
+}
+
+// optional decodes a whole number that may be missing or null, which it
+// returns as nil; its errors say it is name's.
+func optional(name string, raw json.RawMessage) (*int, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var n integer
+	if err := json.Unmarshal(raw, &n); err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
+	}
+	v := int(n)
+	return &v, nil
+}
+
+// enum decodes one of n choices, numbered from 0, which it is where it is
+// missing or null; it reports false for anything else.
+func enum(raw json.RawMessage, n int) (int, bool) {
+	var v integer
+	if len(raw) > 0 && json.Unmarshal(raw, &v) != nil || v < 0 || int(v) >= n {
+		return 0, false
+	}
+	return int(v), true
 }
 
 // numbers decodes a value as Lottie writes it, a number or an array of
@@ -65,29 +122,22 @@ func present(raw json.RawMessage) bool {
 	return len(raw) > 0 && !bytes.Equal(raw, []byte("null")) && !bytes.Equal(raw, []byte("[]"))
 }
 
-// unsupported rejects the controls of a layer that change how it draws,
-// outside the subset, rather than show a plausible but wrong image.
-func (l *rawLayer) unsupported() error {
+// unsupported rejects the controls of a layer that draws, outside the
+// subset, that change how it draws or where, rather than show a
+// plausible but wrong image.
+func (l *rawLayer) unsupported(ty int) error {
 	switch {
-	case l.Type != shapeLayer:
-		if l.Type >= 0 && l.Type < len(layerTypes) && layerTypes[l.Type] != "" {
-			return fmt.Errorf("unsupported %s layer (ty %d)", layerTypes[l.Type], l.Type)
+	case ty != shapeLayer && ty != solidLayer:
+		if ty >= 0 && ty < len(layerTypes) && layerTypes[ty] != "" {
+			return fmt.Errorf("unsupported %s layer (ty %d)", layerTypes[ty], ty)
 		}
-		return fmt.Errorf("unsupported layer type %d", l.Type)
-	case l.DDD != 0:
-		return fmt.Errorf("unsupported 3D layer")
+		return fmt.Errorf("unsupported layer type %d", ty)
 	case l.Matte != 0:
 		return fmt.Errorf("unsupported track matte (tt)")
 	case l.MatteSource != 0:
 		return fmt.Errorf("unsupported matte source (td)")
 	case l.Blend != 0:
 		return fmt.Errorf("unsupported blend mode (bm)")
-	case l.AutoOrient != 0:
-		return fmt.Errorf("unsupported auto-orient (ao)")
-	case l.Stretch != nil && *l.Stretch != 1:
-		return fmt.Errorf("unsupported layer time stretch")
-	case present(l.Parent):
-		return fmt.Errorf("unsupported parent")
 	case present(l.Masks):
 		return fmt.Errorf("unsupported masks")
 	case present(l.Effects):
@@ -95,13 +145,30 @@ func (l *rawLayer) unsupported() error {
 	case present(l.TimeRemap):
 		return fmt.Errorf("unsupported time remapping")
 	}
+	return l.rawPlacement.unsupported()
+}
+
+// unsupported rejects the controls outside the subset that change where a
+// layer is, and so where its children are, whether it draws or not.
+// What else a layer carries, masks, effects, mattes, changes only how it
+// draws itself: a layer that only positions others ignores them.
+func (l *rawPlacement) unsupported() error {
+	if _, ok := enum(l.DDD, 1); !ok {
+		return fmt.Errorf("unsupported 3D layer (ddd %s)", l.DDD)
+	}
+	switch {
+	case l.AutoOrient != 0:
+		return fmt.Errorf("unsupported auto-orient (ao)")
+	case l.Stretch != nil && *l.Stretch != 1:
+		return fmt.Errorf("unsupported layer time stretch")
+	}
 	return nil
 }
 
 // layerTypes and shapeTypes name the kinds of layers (ty) and shape items
 // (ty) that Load rejects, for its errors.
 var (
-	layerTypes = [...]string{0: "precomposition", 1: "solid", 2: "image", 3: "null", 5: "text", 6: "audio", 13: "camera"}
+	layerTypes = [...]string{0: "precomposition", 2: "image", 5: "text", 6: "audio", 13: "camera"}
 	shapeTypes = map[string]string{
 		"gf": "gradient fill", "gs": "gradient stroke", "tm": "trim paths", "rp": "repeater",
 		"mm": "merge paths", "rd": "rounded corners", "sr": "polystar", "pb": "pucker and bloat",
@@ -119,10 +186,20 @@ func decodeProperty(data json.RawMessage) (rawProperty, error) {
 	if raw.Split || present(raw.Expression) && !bytes.Equal(raw.Expression, []byte(`""`)) {
 		return raw, fmt.Errorf("unsupported expression or split position")
 	}
-	if raw.Animated != 0 && raw.Animated != 1 {
-		return raw, fmt.Errorf("unsupported animation flag %d", raw.Animated)
-	}
 	return raw, nil
+}
+
+// keyframed reports whether a property's k holds keyframes: an array whose
+// first entry is an object. Otherwise it holds a value: a number, an array
+// of numbers, a path. Its a, which says which, is ignored, as lottie-web
+// ignores it (getProp in PropertyFactory.js); exporters write a 0 with
+// keyframes, or none.
+func keyframed(k json.RawMessage) bool {
+	if len(k) == 0 || k[0] != '[' {
+		return false
+	}
+	rest := bytes.TrimLeft(k[1:], " \t\r\n")
+	return len(rest) > 0 && rest[0] == '{'
 }
 
 // decodeKeyframes decodes an animated property's keyframes: at least one,

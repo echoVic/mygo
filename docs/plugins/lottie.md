@@ -85,23 +85,42 @@ are outside the subset, with a layer/group/property context.
 | Area | Supported |
 | --- | --- |
 | Composition | Width and height that are positive whole numbers (`100` or `100.0`; `100.5` is rejected), a positive frame rate, in and out points. |
-| Layers | 2D shape layers (`ty: 4`), with in and out points. Hidden layers (`hd: true`) are skipped, whatever they contain. A layer's start time (`st`) is accepted and changes nothing: a shape layer's keyframes and in and out points are in composition frames. |
+| Layers | 2D shape layers (`ty: 4`), solid layers (`ty: 1`) and null layers (`ty: 3`). A layer shows from its in point up to its out point, not at it, as in lottie-web (lottie-ios also shows it at its out point). Null layers and hidden layers (`hd: true`) draw nothing; they matter only as parents. A layer's start time (`st`) is accepted and changes nothing: these layers' keyframes and in and out points are in composition frames. |
+| Solid layers | A rectangle from (0, 0) to the solid's size (`sw`, `sh`), filled with its color (`sc`: `#rrggbb`, as exporters write it, or `#rgb`), under the layer's transform and opacity. The size must be given and not negative; a solid of no size draws nothing. Other CSS colors, and hex colors with an alpha, are rejected. |
+| Parenting | A layer whose `parent` is another layer's `ind` moves with it: its transform is inside its parent's, inside its parent's parent's, and so on, all sampled at the same frame. Only the layer's own in and out points, visibility and opacity decide whether and how it shows; its parents' don't, as in After Effects and lottie-web. Parents don't change the drawing order, which stays the order of the layers. |
 | Geometry | Cubic Bezier paths, rounded rectangles, ellipses; compound paths with nonzero or even-odd fill. Rectangles/ellipses use default direction (`d: 1` or omitted); a negative size draws as its magnitude, and roundness is at most half the shorter side. |
 | Styles | One solid fill and one solid stroke per group, with opacity, width, cap, join and miter limit (4 when `ml` is missing). Styles follow their geometry; independently styled child groups may be nested, at most 32 deep. Hidden items are skipped, whatever they are. |
 | Transform | Anchor, position, scale, rotation and opacity on layers and nested groups. A position split into `x` and `y` (`p.s: true`) animates each on its own; its `z`, like a third component of any 2D value, is ignored. Static zero skew fields are accepted. |
-| Properties | Static and keyframed scalar, 2D point, color and path values; hold, linear and cubic temporal Bezier easing, including back and overshoot easing (`y` controls outside 0 to 1; `x` controls are clamped to 0 to 1). Path morphs preserve vertex count and closed/open state. |
+| Properties | Static and keyframed scalar, 2D point, color and path values; hold, linear and cubic temporal Bezier easing, including back and overshoot easing (`y` controls outside 0 to 1; `x` controls are clamped to 0 to 1). Path morphs preserve vertex count and closed/open state. Whether a property is keyframed is decided by its value, as in lottie-web: `k` is keyframes when it is a list of objects. Its `a` flag, which exporters don't always set to match, is ignored. |
 | Easing per component | Controls written as arrays (`"o": {"x": [0.2, 0.6], "y": [0, 0]}`) ease each component on its own curve: a point's `x` and `y`, a color's channels. Component n uses entry n of each control, or entry 0 where a control has fewer, as lottie-web does; entries beyond the value's components are ignored, such as the third of a scale exported as `[100, 100, 100]`. A scalar uses the first entry. A path has a single curve: the entries of its keyframes' controls must agree. |
 | Spatial tangents | A keyframe of a 2D point with an out tangent `to` and an in tangent `ti` (exporters write them for positions and anchors: a layer's, a group's, a rectangle's, an ellipse's) moves along the cubic Bezier from its value, through value + `to` and next value + `ti`, to the next value. Its eased progress is a fraction of the curve's length, which `Load` measures once, so the motion keeps an even speed along the curve; it starts and ends exactly on the keyframes' values. Easing that overshoots holds the value at the end of the curve it passes. Without tangents, or with zero ones, a value moves in a straight line. |
 
 Every number that `Load` reads as a value must be within ±10,000,000
 (1e7): the composition's size, frame rate and in and out points, layers'
-in and out points, and every coordinate, size, scale, angle, color,
-opacity, width, miter limit, keyframe time and easing control. `Load`
-rejects a composition with a number beyond that. Easing that overshoots can still carry a value past
+in and out points, `ind` and `parent`, solids' sizes, and every
+coordinate, size, scale, angle, color, opacity, width, miter limit,
+keyframe time and easing control. `Load` rejects a composition with a
+number beyond that. Easing that overshoots can still carry a value past
 it, or a chain of large scales overflow; `Draw` skips what it then cannot
 draw rather than fail. Overshooting values stay valid: opacity and color
 channels are clamped to their ranges, and a stroke whose width falls to
 zero or below is not drawn.
+
+Numbers that `Load` reads as whole ones (a layer's type `ty`, `ind`,
+`parent` and `ddd`, a keyframe's hold `h`, a stroke's cap and join, a
+fill rule, a shape's direction) may be written as floats, as some
+exporters write every number: `4.0` reads as 4, and `4.5` is an error.
+
+`Load` resolves parent links once. A `parent` that no layer's `ind` is,
+or that several layers' `ind` is, links that form a cycle, and a chain of
+more than 32 ancestors are errors, which name the layer. A null or hidden
+layer that is the ancestor of a layer that draws is read for its
+transform, which must be in the subset like any (2D, without skew,
+auto-orient, time stretch or expressions); what else it carries (masks,
+effects, mattes, blend modes, time remapping) would change only how it
+draws itself, and is ignored. Every layer's `ind` is read, to resolve
+links; null and hidden layers that place no layer that draws are
+otherwise skipped, whatever they contain.
 
 Geometry shares its group's fill/stroke. Groups containing child groups
 must give each child its own styles; inherited parent styles, interleaved
@@ -112,9 +131,9 @@ keyframe that moves along spatial tangents, which has a single curve, as
 in lottie-web. Colors interpolate channel by channel in the JSON color
 space.
 
-Unsupported features include precompositions, images, text, solid/null
-layers, masks, mattes, blend modes, effects, expressions, 3D, parenting,
-time remapping/stretch, gradients, trim paths, repeaters and other shape
+Unsupported features include precompositions, images, text, masks,
+mattes, blend modes, effects, expressions, 3D, auto-orient, time
+remapping/stretch, gradients, trim paths, repeaters and other shape
 operators. Reverse shape direction (`d: 3`) is rejected. Export paths
 with the intended vertex winding, or use even-odd compound fills.
 

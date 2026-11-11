@@ -194,13 +194,7 @@ func (a *Animation) drawAt(p *ui.Painter, bounds ui.Rect, frame float32) {
 	box := ui.Rect{X: bounds.X + (bounds.W-w*scale)/2, Y: bounds.Y + (bounds.H-h*scale)/2, W: w * scale, H: h * scale}
 	viewport := affine{a: float64(scale), d: float64(scale), e: float64(box.X), f: float64(box.Y)}
 	var path ui.Path
-	p.Clip(box, 0, func() {
-		for i := len(a.layers) - 1; i >= 0; i-- {
-			if l := &a.layers[i]; frame >= l.inPoint && frame < l.outPoint {
-				l.draw(p, &path, viewport, frame, 1)
-			}
-		}
-	})
+	p.Clip(box, 0, func() { a.composition.draw(p, &path, viewport, frame, 1) })
 }
 
 // draw draws the group at frame, under parent, which maps its coordinates
