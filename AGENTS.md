@@ -74,6 +74,7 @@ go run ./examples/markdown-chat            # Markdown replies streaming in (ui/m
 go run ./examples/notes                    # the rich text editor (ui/richtext), in a notes app
 go run ./examples/terminal                 # a terminal (downloads libghostty-vt once)
 go run ./examples/loading                  # loading.dev's 29 indicators (plugins/loading)
+go run ./examples/lottie                   # a Lottie animation of shapes, played in native UI (plugins/lottie)
 go run ./examples/permissionflow           # the system's permissions, asked for and guided to (plugins/permissionflow)
 go run ./plugins/automation/cmd/mygo-automation skills   # the automation CLI's guide, for agents driving an app
 go run ./examples/sf-symbols               # the system's SF Symbols on macOS (plugins/sfsymbols)
@@ -135,6 +136,9 @@ Windows GUI tests need Windows with the WebView2 Runtime (a GitHub Actions
   and `plugins/game/gamepad`, which reads controllers. The loading plugin
   is Go only too, loading.dev's indicators drawn with `ui.Painter` on
   ui's public API: keep them as loading-dev draws them in a browser.
+  The lottie plugin is Go only too, a subset of Lottie JSON whose shape
+  layers it plays, drawn with `ui.Painter` on ui's public API: keep
+  `Load` refusing what it would draw wrong.
   The sfsymbols plugin is Go only too: on macOS it rasterizes the system's
   SF Symbols through purego, and elsewhere it has none (`Image` says so).
   The automation plugin is Go only too, gated with the inspector

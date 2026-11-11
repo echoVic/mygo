@@ -160,6 +160,8 @@ components, from buttons to tables.
   one standard layout.
 - [Loading](plugins/loading.md): loading.dev's 29 loading indicators for
   native UI.
+- [Lottie](plugins/lottie.md): Lottie animations for native UI, a subset
+  of Lottie JSON whose shape layers MyGo draws and plays.
 - [SF Symbols](plugins/sfsymbols.md): Apple's SF Symbols for native UI on
   macOS, drawn by the system.
 - [Automation](plugins/automation.md): drive a running app from another

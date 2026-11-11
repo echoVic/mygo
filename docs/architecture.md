@@ -127,7 +127,8 @@ framework safely. Read it before changing anything under `internal/`.
 │                       terminal, a view of native UI running programs with
 │                       libghostty-vt, glass, game, what games need
 │                       beyond what apps do (game/gamepad), loading,
-│                       loading.dev's indicators for native UI,
+│                       loading.dev's indicators for native UI, lottie,
+│                       Lottie JSON's shape layers played in native UI,
 │                       automation, a socket other processes drive the
 │                       app through, for end-to-end tests, with its
 │                       command line client for agents
@@ -159,7 +160,8 @@ framework safely. Read it before changing anything under `internal/`.
 │                       views in native UI); launcher (a Spotlight-like panel,
 │                       native UI); wind (a texture of glyphs lit by a
 │                       wind, two shaders of ui/shader); loading (the
-│                       loading plugin's indicators); video (a GIF
+│                       loading plugin's indicators); lottie (a Lottie
+│                       animation the lottie plugin plays); video (a GIF
 │                       looping behind a window's content, a trailer
 │                       with controls over it); permissionflow
 │                       (the permissions, asked for and guided to);
