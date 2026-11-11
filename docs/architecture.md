@@ -128,7 +128,7 @@ framework safely. Read it before changing anything under `internal/`.
 │                       libghostty-vt, glass, game, what games need
 │                       beyond what apps do (game/gamepad), loading,
 │                       loading.dev's indicators for native UI, lottie,
-│                       Lottie JSON's shape layers played in native UI,
+│                       a subset of Lottie JSON played in native UI,
 │                       automation, a socket other processes drive the
 │                       app through, for end-to-end tests, with its
 │                       command line client for agents
