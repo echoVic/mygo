@@ -29,7 +29,8 @@ JavaScript package whose functions call them. The app uses the Go half with
 - [Loading](plugins/loading.md): loading.dev's 29 loading indicators for
   native UI, as they look and move in browsers. It is all Go.
 - [Lottie](plugins/lottie.md): Lottie animations for native UI, a subset
-  of Lottie JSON whose shape layers MyGo draws and plays. It is all Go.
+  of Lottie JSON that MyGo draws and plays: shapes, solids, parents and
+  precompositions. It is all Go.
 - [SF Symbols](plugins/sfsymbols.md): Apple's SF Symbols for native UI on
   macOS, drawn by the system. It is all Go.
 - [Automation](plugins/automation.md): a socket through which another
