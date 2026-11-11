@@ -9,7 +9,6 @@ import (
 
 func TestLoadRejectsUnsupportedControls(t *testing.T) {
 	tests := []struct{ name, layer string }{
-		{"parent", `{"ty":4,"parent":1}`},
 		{"matte", `{"ty":4,"tt":1}`},
 		{"matte-source", `{"ty":4,"td":1}`},
 		{"blend", `{"ty":4,"bm":1}`},

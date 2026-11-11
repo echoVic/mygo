@@ -76,10 +76,11 @@ func (p property[T]) sample(frame float32) T {
 	return p.keys[len(p.keys)-1].start
 }
 
+// rawProperty is a property as Lottie writes it: its value, or its
+// keyframes, in k (see keyframed).
 type rawProperty struct {
 	Expression json.RawMessage `json:"x"`
 	Split      bool            `json:"s"`
-	Animated   int             `json:"a"`
 	K          json.RawMessage `json:"k"`
 }
 
@@ -87,7 +88,7 @@ type rawKeyframe struct {
 	T      num             `json:"t"`
 	S      json.RawMessage `json:"s"`
 	E      json.RawMessage `json:"e"`
-	H      int             `json:"h"`
+	H      integer         `json:"h"`
 	I      rawBezier       `json:"i"`
 	O      rawBezier       `json:"o"`
 	To, Ti json.RawMessage
@@ -156,7 +157,7 @@ func parseProperty[T any](data json.RawMessage, def T, kind *valueKind[T]) (prop
 	if err != nil {
 		return property[T]{}, err
 	}
-	if raw.Animated == 0 {
+	if !keyframed(raw.K) {
 		v, err := kind.decode(raw.K)
 		if err != nil {
 			return property[T]{}, fmt.Errorf("static value: %w", err)

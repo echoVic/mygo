@@ -121,7 +121,7 @@ func TestLoadRejectsUnsupportedFeatures(t *testing.T) {
 	}
 	// The errors name what they reject, in words.
 	for want, layer := range map[string]string{
-		"unsupported null layer (ty 3)":    `{"ty":3}`,
+		"unsupported image layer (ty 2)":   `{"ty":2}`,
 		"unsupported layer type 42":        `{"ty":42}`,
 		`unsupported trim paths (ty "tm")`: `{"ty":4,"shapes":[{"ty":"tm"}]}`,
 		`unsupported shape type "xx"`:      `{"ty":4,"shapes":[{"ty":"xx"}]}`,
