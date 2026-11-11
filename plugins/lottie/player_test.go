@@ -130,3 +130,16 @@ func TestReduceMotion(t *testing.T) {
 		t.Fatal("reduced motion requested frames")
 	}
 }
+
+func TestZeroValuePlayerIsSafe(t *testing.T) {
+	var p Player
+	if got := p.Duration(); got != 0 {
+		t.Fatalf("zero-value duration = %v, want 0", got)
+	}
+	p.Play()
+	p.Pause()
+	p.Reset()
+	p.Seek(time.Second)
+	tester, _, _ := playerTester(&p, false)
+	tester.Advance(time.Second)
+}

@@ -253,3 +253,10 @@ func TestDrawRoundedRectangleIsSymmetric(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadRejectsNonMonotonicTemporalEasing(t *testing.T) {
+	data := `{"w":10,"h":10,"fr":10,"ip":0,"op":2,"layers":[{"ty":4,"ks":{"p":{"a":1,"k":[{"t":0,"s":[0,0],"e":[10,0],"i":{"x":0.58,"y":-1},"o":{"x":0.42,"y":2}},{"t":2,"s":[10,0]}]}}}]}`
+	if _, err := Load([]byte(data)); err == nil || !strings.Contains(err.Error(), "temporal easing") {
+		t.Fatalf("Load error = %v, want temporal easing rejection", err)
+	}
+}

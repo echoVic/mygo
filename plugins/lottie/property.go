@@ -286,7 +286,11 @@ func parseScalar(data json.RawMessage, def float32) (scalarProperty, error) {
 				return scalarProperty{}, fmt.Errorf("scalar keyframe %d next start: %w", i, err)
 			}
 		}
-		keys[i] = scalarKeyframe{t: frame.T, start: start, end: end, hold: frame.H == 1, ease: frameEase(frame)}
+		ease, err := frameEase(frame)
+		if err != nil {
+			return scalarProperty{}, fmt.Errorf("scalar keyframe %d temporal easing: %w", i, err)
+		}
+		keys[i] = scalarKeyframe{t: frame.T, start: start, end: end, hold: frame.H == 1, ease: ease}
 	}
 	return scalarProperty{keys: keys}, nil
 }
@@ -328,7 +332,11 @@ func parsePoint(data json.RawMessage, def point) (pointProperty, error) {
 				return pointProperty{}, fmt.Errorf("point keyframe %d next start: %w", i, err)
 			}
 		}
-		keys[i] = pointKeyframe{t: frame.T, start: start, end: end, hold: frame.H == 1, ease: frameEase(frame)}
+		ease, err := frameEase(frame)
+		if err != nil {
+			return pointProperty{}, fmt.Errorf("point keyframe %d temporal easing: %w", i, err)
+		}
+		keys[i] = pointKeyframe{t: frame.T, start: start, end: end, hold: frame.H == 1, ease: ease}
 	}
 	return pointProperty{keys: keys}, nil
 }
@@ -370,7 +378,11 @@ func parseColor(data json.RawMessage, def color) (colorProperty, error) {
 				return colorProperty{}, fmt.Errorf("color keyframe %d next start: %w", i, err)
 			}
 		}
-		keys[i] = colorKeyframe{t: frame.T, start: start, end: end, hold: frame.H == 1, ease: frameEase(frame)}
+		ease, err := frameEase(frame)
+		if err != nil {
+			return colorProperty{}, fmt.Errorf("color keyframe %d temporal easing: %w", i, err)
+		}
+		keys[i] = colorKeyframe{t: frame.T, start: start, end: end, hold: frame.H == 1, ease: ease}
 	}
 	return colorProperty{keys: keys}, nil
 }
@@ -415,16 +427,27 @@ func parsePath(data json.RawMessage) (pathProperty, error) {
 		if start.Closed != end.Closed || len(start.Vertices) != len(end.Vertices) || len(start.In) != len(end.In) || len(start.Out) != len(end.Out) {
 			return pathProperty{}, fmt.Errorf("path keyframe %d changes vertex count", i)
 		}
-		keys[i] = pathKeyframe{t: frame.T, start: start, end: end, hold: frame.H == 1, ease: frameEase(frame)}
+		ease, err := frameEase(frame)
+		if err != nil {
+			return pathProperty{}, fmt.Errorf("path keyframe %d temporal easing: %w", i, err)
+		}
+		keys[i] = pathKeyframe{t: frame.T, start: start, end: end, hold: frame.H == 1, ease: ease}
 	}
 	return pathProperty{keys: keys}, nil
 }
 
-func frameEase(frame rawKeyframe) easing {
+func frameEase(frame rawKeyframe) (easing, error) {
 	if len(frame.I.X) == 0 || len(frame.I.Y) == 0 || len(frame.O.X) == 0 || len(frame.O.Y) == 0 {
-		return nil
+		return nil, nil
 	}
-	return cubicBezier(frame.O.X[0], frame.O.Y[0], frame.I.X[0], frame.I.Y[0])
+	y1, y2 := frame.O.Y[0], frame.I.Y[0]
+	// Temporal easing must stay within the interpolation interval and be
+	// monotonic. Otherwise a malformed export can make progress run backward
+	// and overshoot the keyframe endpoints.
+	if !finite(float64(y1)) || !finite(float64(y2)) || y1 < 0 || y1 > 1 || y2 < 0 || y2 > 1 || y1 > y2 {
+		return nil, fmt.Errorf("temporal easing y controls must be monotonic in [0,1]")
+	}
+	return cubicBezier(frame.O.X[0], y1, frame.I.X[0], y2), nil
 }
 
 func cubicBezier(x1, y1, x2, y2 float32) easing {
