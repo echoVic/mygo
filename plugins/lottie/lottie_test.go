@@ -119,6 +119,18 @@ func TestLoadRejectsUnsupportedFeatures(t *testing.T) {
 			t.Errorf("Load(%s) error = %v, want unsupported error", data, err)
 		}
 	}
+	// The errors name what they reject, in words.
+	for want, layer := range map[string]string{
+		"unsupported null layer (ty 3)":    `{"ty":3}`,
+		"unsupported layer type 42":        `{"ty":42}`,
+		`unsupported trim paths (ty "tm")`: `{"ty":4,"shapes":[{"ty":"tm"}]}`,
+		`unsupported shape type "xx"`:      `{"ty":4,"shapes":[{"ty":"xx"}]}`,
+	} {
+		_, err := Load([]byte(`{"w":10,"h":10,"fr":10,"ip":0,"op":1,"layers":[` + layer + `]}`))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("Load(%s) error = %v, want %q", layer, err, want)
+		}
+	}
 }
 
 func TestDrawRendersShapeLayers(t *testing.T) {

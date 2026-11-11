@@ -16,7 +16,9 @@
 //
 // The subset is shape layers: paths, rectangles and ellipses with solid
 // fills and strokes, under 2D transforms, their properties static or
-// keyframed with Bézier easing. Load reports anything else that would
+// keyframed with Bézier easing, per component where a value has several,
+// and positions moving along curved motion paths. Load reports anything
+// else that would
 // change the picture as an error rather than draw it wrong; the plugin's
 // guide (docs/plugins/lottie.md) lists what it accepts.
 package lottie
@@ -233,6 +235,9 @@ func parseGroup(items []rawShape, depth int) (group, error) {
 			}
 			g.styles = append(g.styles, s)
 		default:
+			if name, ok := shapeTypes[it.Type]; ok {
+				return group{}, fmt.Errorf("item %d: unsupported %s (ty %q)", i, name, it.Type)
+			}
 			return group{}, fmt.Errorf("item %d: unsupported shape type %q", i, it.Type)
 		}
 	}

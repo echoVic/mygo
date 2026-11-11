@@ -88,8 +88,10 @@ are outside the subset, with a layer/group/property context.
 | Layers | 2D shape layers (`ty: 4`), with in and out points. Hidden layers (`hd: true`) are skipped, whatever they contain. A layer's start time (`st`) is accepted and changes nothing: a shape layer's keyframes and in and out points are in composition frames. |
 | Geometry | Cubic Bezier paths, rounded rectangles, ellipses; compound paths with nonzero or even-odd fill. Rectangles/ellipses use default direction (`d: 1` or omitted); a negative size draws as its magnitude, and roundness is at most half the shorter side. |
 | Styles | One solid fill and one solid stroke per group, with opacity, width, cap, join and miter limit (4 when `ml` is missing). Styles follow their geometry; independently styled child groups may be nested, at most 32 deep. Hidden items are skipped, whatever they are. |
-| Transform | Anchor, position, scale, rotation and opacity on layers and nested groups. Static zero skew fields are accepted. |
+| Transform | Anchor, position, scale, rotation and opacity on layers and nested groups. A position split into `x` and `y` (`p.s: true`) animates each on its own; its `z`, like a third component of any 2D value, is ignored. Static zero skew fields are accepted. |
 | Properties | Static and keyframed scalar, 2D point, color and path values; hold, linear and cubic temporal Bezier easing, including back and overshoot easing (`y` controls outside 0 to 1; `x` controls are clamped to 0 to 1). Path morphs preserve vertex count and closed/open state. |
+| Easing per component | Controls written as arrays (`"o": {"x": [0.2, 0.6], "y": [0, 0]}`) ease each component on its own curve: a point's `x` and `y`, a color's channels. Component n uses entry n of each control, or entry 0 where a control has fewer, as lottie-web does; entries beyond the value's components are ignored, such as the third of a scale exported as `[100, 100, 100]`. A scalar uses the first entry. A path has a single curve: the entries of its keyframes' controls must agree. |
+| Spatial tangents | A keyframe of a 2D point with an out tangent `to` and an in tangent `ti` (exporters write them for positions and anchors: a layer's, a group's, a rectangle's, an ellipse's) moves along the cubic Bezier from its value, through value + `to` and next value + `ti`, to the next value. Its eased progress is a fraction of the curve's length, which `Load` measures once, so the motion keeps an even speed along the curve; it starts and ends exactly on the keyframes' values. Easing that overshoots holds the value at the end of the curve it passes. Without tangents, or with zero ones, a value moves in a straight line. |
 
 Every number that `Load` reads as a value must be within ±10,000,000
 (1e7): the composition's size, frame rate and in and out points, layers'
@@ -104,9 +106,11 @@ zero or below is not drawn.
 Geometry shares its group's fill/stroke. Groups containing child groups
 must give each child its own styles; inherited parent styles, interleaved
 geometry/styles, multiple fills/strokes, and multiple transforms per group
-are rejected. Spatial position curves and component-specific easing are
-not supported; zero spatial tangents are accepted. Colors interpolate
-channel by channel in the JSON color space.
+are rejected. Spatial tangents on values other than 2D points (a
+rotation, a color) are rejected, and so is easing per component on a
+keyframe that moves along spatial tangents, which has a single curve, as
+in lottie-web. Colors interpolate channel by channel in the JSON color
+space.
 
 Unsupported features include precompositions, images, text, solid/null
 layers, masks, mattes, blend modes, effects, expressions, 3D, parenting,
@@ -121,7 +125,7 @@ Opacity multiplies each primitive's alpha. Overlapping children or a
 fill and stroke in a translucent group can therefore look different from
 After Effects' isolated group compositing. This version does not allocate
 an offscreen layer to isolate group opacity. There is no claim of full
-Lottie conformance or measured coverage of real-world assets.
+Lottie conformance.
 
 ## Example and tests
 
@@ -132,3 +136,16 @@ the repository's license and uses no third-party artwork.
 `go test ./plugins/lottie` uses deterministic `ui.Tester` rendering and
 clock advancement to check pixels, timing, controls, reduced motion and
 validation. Native window behavior and GPU output require a desktop run.
+
+To measure how much of a collection of real files the subset plays, point
+`LOTTIE_CORPUS` at a directory of them:
+
+```sh
+LOTTIE_CORPUS=path/to/samples go test -v -run Corpus ./plugins/lottie
+```
+
+The test loads every Lottie document under it (a JSON object with
+`layers`), draws frames across each that loads, and fails if any panics.
+It logs the share that loads, in all and per top-level folder, and the
+first error of each file that doesn't, like errors grouped, most frequent
+first. Without the variable it is skipped.

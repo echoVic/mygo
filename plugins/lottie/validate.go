@@ -70,6 +70,9 @@ func present(raw json.RawMessage) bool {
 func (l *rawLayer) unsupported() error {
 	switch {
 	case l.Type != shapeLayer:
+		if l.Type >= 0 && l.Type < len(layerTypes) && layerTypes[l.Type] != "" {
+			return fmt.Errorf("unsupported %s layer (ty %d)", layerTypes[l.Type], l.Type)
+		}
 		return fmt.Errorf("unsupported layer type %d", l.Type)
 	case l.DDD != 0:
 		return fmt.Errorf("unsupported 3D layer")
@@ -95,6 +98,17 @@ func (l *rawLayer) unsupported() error {
 	return nil
 }
 
+// layerTypes and shapeTypes name the kinds of layers (ty) and shape items
+// (ty) that Load rejects, for its errors.
+var (
+	layerTypes = [...]string{0: "precomposition", 1: "solid", 2: "image", 3: "null", 5: "text", 6: "audio", 13: "camera"}
+	shapeTypes = map[string]string{
+		"gf": "gradient fill", "gs": "gradient stroke", "tm": "trim paths", "rp": "repeater",
+		"mm": "merge paths", "rd": "rounded corners", "sr": "polystar", "pb": "pucker and bloat",
+		"tw": "twist", "op": "offset path", "zz": "zig zag", "no": "no style",
+	}
+)
+
 // decodeProperty decodes a property's envelope, rejecting expressions and
 // positions split into separate dimensions.
 func decodeProperty(data json.RawMessage) (rawProperty, error) {
@@ -112,9 +126,9 @@ func decodeProperty(data json.RawMessage) (rawProperty, error) {
 }
 
 // decodeKeyframes decodes an animated property's keyframes: at least one,
-// at increasing times, without spatial tangents or easing per component.
-// A last keyframe without a value, as exporters end a property, takes the
-// previous one's end.
+// at increasing times, and their spatial tangents, of which a 2D curve
+// reads x and y. A last keyframe without a value, as exporters end a
+// property, takes the previous one's end.
 func decodeKeyframes(data json.RawMessage) ([]rawKeyframe, error) {
 	var frames []rawKeyframe
 	if err := json.Unmarshal(data, &frames); err != nil {
@@ -128,25 +142,22 @@ func decodeKeyframes(data json.RawMessage) ([]rawKeyframe, error) {
 		if i > 0 && !(f.T > frames[i-1].T) {
 			return nil, fmt.Errorf("keyframe times must increase")
 		}
-		for _, tangent := range []json.RawMessage{f.To, f.Ti} {
-			if len(tangent) == 0 {
+		for _, tangent := range []struct {
+			raw json.RawMessage
+			dst *point
+		}{{f.To, &f.out}, {f.Ti, &f.in}} {
+			if len(tangent.raw) == 0 {
 				continue
 			}
-			values, err := numbers(tangent, 0)
+			values, err := numbers(tangent.raw, 0)
 			if err != nil {
 				return nil, fmt.Errorf("invalid spatial tangents: %w", err)
 			}
-			for _, v := range values {
-				if v != 0 {
-					return nil, fmt.Errorf("unsupported spatial tangents")
-				}
+			if len(values) > 0 {
+				tangent.dst.X = float32(values[0])
 			}
-		}
-		for _, controls := range [][]float32{f.I.X, f.I.Y, f.O.X, f.O.Y} {
-			for _, v := range controls {
-				if v != controls[0] {
-					return nil, fmt.Errorf("unsupported component-specific easing")
-				}
+			if len(values) > 1 {
+				tangent.dst.Y = float32(values[1])
 			}
 		}
 		if !present(f.S) {
