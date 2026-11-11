@@ -2,6 +2,7 @@ package lottie
 
 import (
 	"encoding/json"
+	"image"
 	"strings"
 	"testing"
 )
@@ -103,5 +104,96 @@ func TestRootGroupTransform(t *testing.T) {
 	a := mustLoad(t, `{"ty":4,"shapes":[{"ty":"gr","it":[`+redRect+`]}, {"ty":"tr","p":{"k":[20,0]}}]}`)
 	if got := inkBounds(renderAt(a, 0)).Min.X; got != 50 {
 		t.Fatalf("root transform lost: x = %d, want 50", got)
+	}
+}
+
+// Load rejects numbers beyond maxMagnitude, wherever they are: in every
+// kind of property, keyframe times, easing, and the composition's own.
+func TestLoadRejectsHugeNumbers(t *testing.T) {
+	layer := func(ks, shapes string) string {
+		return `{"w":100,"h":80,"fr":10,"ip":0,"op":20,"layers":[{"ty":4,"ks":{` + ks + `},"shapes":[` + shapes + `]}]}`
+	}
+	path := func(v, tangent string) string {
+		return `{"ty":"sh","ks":{"k":{"i":[[0,0],[` + tangent + `,0],[0,0]],"o":[[0,0],[0,0],[0,0]],"v":[[0,0],[` + v + `,0],[0,10]],"c":true}}},{"ty":"fl","c":{"k":[1,0,0]}}`
+	}
+	stroke := func(w, ml string) string {
+		return `{"ty":"rc","s":{"k":[10,10]}},{"ty":"st","c":{"k":[1,0,0]},"w":{"k":` + w + `},"ml":` + ml + `}`
+	}
+	for name, data := range map[string]string{
+		"anchor":        layer(`"a":{"k":[3e38,0]}`, redRect),
+		"scale":         layer(`"s":{"k":[3e38,3e38]}`, redRect),
+		"position-keys": layer(`"p":{"a":1,"k":[{"t":0,"s":[-3e38,0],"e":[3e38,0]},{"t":10,"s":[3e38,0]}]}`, redRect),
+		"rotation":      layer(`"r":{"k":1e30}`, redRect),
+		"opacity":       layer(`"o":{"k":1e30}`, redRect),
+		"key-time":      layer(`"r":{"a":1,"k":[{"t":0,"s":[0]},{"t":1e30,"s":[1]}]}`, redRect),
+		"easing":        layer(`"r":{"a":1,"k":[{"t":0,"s":[0],"e":[1],"o":{"x":0.5,"y":1e30},"i":{"x":0.5,"y":1}},{"t":10,"s":[1]}]}`, redRect),
+		"color":         layer(``, `{"ty":"rc","s":{"k":[10,10]}},{"ty":"fl","c":{"k":[1e30,0,0]}}`),
+		"rect-size":     layer(``, `{"ty":"rc","s":{"k":[1e30,10]}},{"ty":"fl","c":{"k":[1,0,0]}}`),
+		"vertex":        layer(``, path(`1e30`, `0`)),
+		"tangent":       layer(``, path(`10`, `1e30`)),
+		"stroke-width":  layer(``, stroke(`1e30`, `4`)),
+		"miter":         layer(``, stroke(`1`, `1e30`)),
+		"width":         `{"w":1e30,"h":80,"fr":10,"ip":0,"op":20,"layers":[]}`,
+		"out-point":     `{"w":100,"h":80,"fr":10,"ip":0,"op":1e30,"layers":[]}`,
+		"layer-out":     `{"w":100,"h":80,"fr":10,"ip":0,"op":20,"layers":[{"ty":4,"op":1e30}]}`,
+	} {
+		if _, err := Load([]byte(data)); err == nil || !strings.Contains(err.Error(), "outside") {
+			t.Errorf("%s: error %v, want a number outside the bound", name, err)
+		}
+	}
+}
+
+// Whatever Load accepts, Draw draws without panicking: values at the
+// bound, overshooting easings that carry them far past it, and transforms
+// nested until their product overflows float32 skip what can't be drawn.
+func TestDrawSurvivesExtremeValues(t *testing.T) {
+	const big = `1e7`
+	overshoot := `"o":{"x":0.5,"y":` + big + `},"i":{"x":0.5,"y":-` + big + `}`
+	keys := func(from, to string) string {
+		return `{"a":1,"k":[{"t":0,"s":` + from + `,"e":` + to + `,` + overshoot + `},{"t":20,"s":` + to + `}]}`
+	}
+	// Static scales of 1e5 a level overflow float32 within 8 levels;
+	// overshooting ones, past 1e9 a level, overflow even float64's product.
+	nested, overflowing := redRect, redRect
+	for range 8 {
+		nested = `{"ty":"gr","it":[` + nested + `,{"ty":"tr","s":{"k":[` + big + `,` + big + `]},"r":{"k":` + big + `}}]}`
+	}
+	for range maxGroupDepth {
+		overflowing = `{"ty":"gr","it":[` + overflowing + `,{"ty":"tr","s":` + keys(`[100,100]`, `[1e7,1e7]`) + `}]}`
+	}
+	shapes := []string{
+		`{"ty":"gr","it":[{"ty":"rc","p":` + keys(`[0,0]`, `[1e7,-1e7]`) + `,"s":` + keys(`[40,20]`, `[-1e7,1e7]`) + `,"r":` + keys(`[0]`, `[1e7]`) + `},` +
+			`{"ty":"fl","c":` + keys(`[0,0,0,1]`, `[1e7,-1e7,1,1e7]`) + `,"o":` + keys(`[0]`, `[1e7]`) + `},` +
+			`{"ty":"st","lj":1,"ml":1e7,"c":{"k":[0,0,1]},"w":` + keys(`[-1e7]`, `[1e7]`) + `}]}`,
+		`{"ty":"gr","it":[{"ty":"sh","ks":{"a":1,"k":[{"t":0,"s":[{"i":[[0,0],[1e7,1e7]],"o":[[-1e7,0],[0,0]],"v":[[0,0],[1e7,-1e7]],"c":false}],"e":[{"i":[[1e7,0],[0,0]],"o":[[0,0],[0,-1e7]],"v":[[-1e7,1e7],[0,0]],"c":false}],` + overshoot + `},{"t":20}]}},` +
+			`{"ty":"st","lc":3,"lj":1,"c":{"k":[1,0,0]},"w":{"k":1e7}},{"ty":"tr","a":` + keys(`[0,0]`, `[1e7,1e7]`) + `,"s":` + keys(`[100,100]`, `[1e7,0]`) + `,"r":` + keys(`[0]`, `[1e7]`) + `}]}`,
+		nested,
+		overflowing,
+	}
+	for i, shape := range shapes {
+		a := mustLoad(t, `{"ty":4,"ks":{"p":`+keys(`[0,0]`, `[1e7,1e7]`)+`,"s":`+keys(`[100,100]`, `[-1e7,1e7]`)+`},"shapes":[`+shape+`]}`)
+		for f := float32(0); f < 20; f += 0.5 {
+			t.Run("", func(t *testing.T) {
+				defer func() {
+					if r := recover(); r != nil {
+						t.Fatalf("shape %d at frame %v: Draw panicked: %v", i, f, r)
+					}
+				}()
+				renderAt(a, f)
+				renderBox(a, 400, 30, f)
+			})
+		}
+	}
+}
+
+// Overshooting easing can carry a rectangle's size below zero, or its
+// roundness past half its side: it draws as the rectangle of its size's
+// magnitude, its corners no rounder than a pill's.
+func TestNegativeRectangleSizeDrawsItsMagnitude(t *testing.T) {
+	rect := func(size string) *image.RGBA {
+		return renderAt(mustLoad(t, `{"ty":4,"shapes":[{"ty":"rc","p":{"k":[50,40]},"s":{"k":`+size+`},"r":{"k":30}},{"ty":"fl","c":{"k":[1,0,0]}}]}`), 0)
+	}
+	if !samePixels(rect(`[-40,-20]`), rect(`[40,20]`)) {
+		t.Fatal("a rectangle of negative size draws differently from its magnitude")
 	}
 }

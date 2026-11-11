@@ -6,142 +6,263 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+// group is a shape group: geometry that its styles paint, or child groups,
+// under a transform. A layer is one too, its transform the layer's and its
+// one child the layer's shapes.
+type group struct {
+	transform transform
+	geometry  []geometry
+	// outlines is the geometry's, made once by Load when none of it is
+	// animated; animated geometry is sampled every frame instead.
+	outlines []pathData
+	animated bool
+	// styles paint the geometry, the first on top, as Lottie lists them.
+	styles []style
+	groups []group
+}
+
+// geometry is a group's path, rectangle or ellipse.
+type geometry interface {
+	outline(frame float32) pathData
+	animated() bool
+}
+
+type pathShape struct{ path property[pathData] }
+
+type rectShape struct {
+	position, size property[point]
+	radius         property[float32]
+}
+
+type ellipseShape struct{ position, size property[point] }
+
+func (s pathShape) outline(frame float32) pathData { return s.path.sample(frame) }
+func (s pathShape) animated() bool                 { return s.path.animated() }
+
+func (s rectShape) outline(frame float32) pathData {
+	return rectPath(s.position.sample(frame), s.size.sample(frame), s.radius.sample(frame))
+}
+func (s rectShape) animated() bool {
+	return s.position.animated() || s.size.animated() || s.radius.animated()
+}
+
+func (s ellipseShape) outline(frame float32) pathData {
+	return ellipsePath(s.position.sample(frame), s.size.sample(frame))
+}
+func (s ellipseShape) animated() bool { return s.position.animated() || s.size.animated() }
+
+// retain makes the group's outlines once, when its geometry is static.
+func (g *group) retain() {
+	for _, s := range g.geometry {
+		if s.animated() {
+			g.animated = true
+			return
+		}
+	}
+	g.outlines = g.sample(0)
+}
+
+// outlinesAt returns the group's outlines at frame: those Load retained,
+// or its animated geometry sampled.
+func (g *group) outlinesAt(frame float32) []pathData {
+	if !g.animated {
+		return g.outlines
+	}
+	return g.sample(frame)
+}
+
+func (g *group) sample(frame float32) []pathData {
+	if len(g.geometry) == 0 {
+		return nil
+	}
+	out := make([]pathData, len(g.geometry))
+	for i, s := range g.geometry {
+		out[i] = s.outline(frame)
+	}
+	return out
+}
+
+// style is a group's fill or stroke.
+type style interface {
+	// paint paints outlines, whose points m maps into the painter's
+	// coordinates, with alpha, through path, which it may reset.
+	paint(p *ui.Painter, path *ui.Path, outlines []pathData, m affine, frame, alpha float32)
+}
+
+type fill struct {
+	rule    ui.FillRule
+	color   property[color]
+	opacity property[float32]
+}
+
+type stroke struct {
+	cap            ui.LineCap
+	join           ui.LineJoin
+	miter          float32
+	color          property[color]
+	opacity, width property[float32]
+}
+
+// A fill's outlines are mapped by m whole, exactly, so that they are
+// rasterized at the size they show.
+func (f *fill) paint(p *ui.Painter, path *ui.Path, outlines []pathData, m affine, frame, alpha float32) {
+	alpha *= percent(f.opacity, frame)
+	if !(alpha > 0) || !trace(path, outlines, m) {
+		return
+	}
+	p.FillPath(path.FillRule(f.rule), f.color.sample(frame).ui(alpha))
+}
+
+// A stroke's outlines are mapped by m whole when m scales evenly, as
+// viewports and most transforms do, its width scaled with them. Otherwise
+// they are scaled evenly as far as m stretches most, which keeps the
+// stroke's shape, and the painter transforms them the rest of the way,
+// which only shrinks them.
+func (s *stroke) paint(p *ui.Painter, path *ui.Path, outlines []pathData, m affine, frame, alpha float32) {
+	alpha *= percent(s.opacity, frame)
+	if !(alpha > 0) {
+		return
+	}
+	scale, even := m.similarity()
+	place := m
+	if !even {
+		scale = m.maxScale()
+		place = scaling(scale)
+	}
+	width := float64(s.width.sample(frame)) * scale
+	if !(width > 0) || !drawable(width) || !trace(path, outlines, place) {
+		return
+	}
+	path.Cap(s.cap).Join(s.join).MiterLimit(s.miter)
+	c := s.color.sample(frame).ui(alpha)
+	if even {
+		p.StrokePath(path, float32(width), c)
+		return
+	}
+	rest, ok := m.mul(scaling(1 / scale)).transform()
+	if !ok {
+		return
+	}
+	p.Transform(rest, 0, 0, func() { p.StrokePath(path, float32(width), c) })
+}
+
+// trace sets path to outlines, their points mapped by m, and reports
+// whether all of them are within what the painter draws (maxDIPs).
+func trace(path *ui.Path, outlines []pathData, m affine) bool {
+	path.Reset()
+	ok := true
+	at := func(p point) (float32, float32) {
+		x, y := m.point(p)
+		ok = ok && drawable(x) && drawable(y)
+		return float32(x), float32(y)
+	}
+	add := func(p, d point) point { return point{p.X + d.X, p.Y + d.Y} }
+	for _, o := range outlines {
+		v := o.Vertices
+		if len(v) == 0 {
+			continue
+		}
+		path.MoveTo(at(v[0]))
+		curve := func(from, to int) {
+			x1, y1 := at(add(v[from], o.Out[from]))
+			x2, y2 := at(add(v[to], o.In[to]))
+			x, y := at(v[to])
+			path.CubeTo(x1, y1, x2, y2, x, y)
+		}
+		for i := 1; i < len(v); i++ {
+			curve(i-1, i)
+		}
+		if o.Closed {
+			curve(len(v)-1, 0)
+			path.Close()
+		}
+	}
+	return ok
+}
+
+// drawAt draws the composition at frame, aspect-fit and centered in bounds,
+// clipped to its rectangle.
 func (a *Animation) drawAt(p *ui.Painter, bounds ui.Rect, frame float32) {
 	if a == nil || p == nil || a.width <= 0 || a.height <= 0 {
 		return
 	}
-	scale := min(bounds.W/float32(a.width), bounds.H/float32(a.height))
-	if scale <= 0 {
+	w, h := float32(a.width), float32(a.height)
+	scale := min(bounds.W/w, bounds.H/h)
+	if !(scale > 0) || !finite(float64(scale)) {
 		return
 	}
-	ox := bounds.X + (bounds.W-float32(a.width)*scale)/2
-	oy := bounds.Y + (bounds.H-float32(a.height)*scale)/2
-	viewport := ui.Scaling(scale, scale).Then(ui.Translation(ox, oy))
-	p.Transform(viewport, 0, 0, func() {
+	box := ui.Rect{X: bounds.X + (bounds.W-w*scale)/2, Y: bounds.Y + (bounds.H-h*scale)/2, W: w * scale, H: h * scale}
+	viewport := affine{a: float64(scale), d: float64(scale), e: float64(box.X), f: float64(box.Y)}
+	var path ui.Path
+	p.Clip(box, 0, func() {
 		for i := len(a.layers) - 1; i >= 0; i-- {
-			layer := a.layers[i]
-			if layer.hidden || frame < layer.inPoint || frame >= layer.outPoint {
-				continue
+			if l := &a.layers[i]; frame >= l.inPoint && frame < l.outPoint {
+				l.draw(p, &path, viewport, frame, 1)
 			}
-			frame := frame - layer.start
-			alpha := clamp(layer.opacity.sample(frame)/100, 0, 1)
-			if alpha <= 0 {
-				continue
-			}
-			p.Transform(sampleTransform(layer.transform, frame), 0, 0, func() {
-				for i := len(layer.groups) - 1; i >= 0; i-- {
-					drawGroup(p, layer.groups[i], frame, alpha)
-				}
-			})
 		}
 	})
 }
 
-func drawGroup(p *ui.Painter, group group, frame, parentAlpha float32) {
-	alpha := parentAlpha * clamp(group.transform.opacity.sample(frame)/100, 0, 1)
-	if alpha <= 0 {
+// draw draws the group at frame, under parent, which maps its coordinates
+// into the painter's. A transform that doesn't map them to finite ones
+// skips the group, and what is in it.
+func (g *group) draw(p *ui.Painter, path *ui.Path, parent affine, frame, alpha float32) {
+	alpha *= percent(g.transform.opacity, frame)
+	if !(alpha > 0) {
 		return
 	}
-	p.Transform(sampleTransform(group.transform, frame), 0, 0, func() {
-		var fill *fillShape
-		if len(group.fills) > 0 {
-			fill = &group.fills[0]
-		}
-		var stroke *strokeShape
-		if len(group.strokes) > 0 {
-			stroke = &group.strokes[0]
-		}
-		path := new(ui.Path)
-		for _, shape := range group.paths {
-			appendPathData(path, shape.path.sample(frame))
-		}
-		for _, shape := range group.rects {
-			appendPathData(path, rectPath(shape.position.sample(frame), shape.size.sample(frame), shape.radius.sample(frame)))
-		}
-		for _, shape := range group.ellipses {
-			appendPathData(path, ellipsePath(shape.position.sample(frame), shape.size.sample(frame)))
-		}
-		drawPath(p, path, fill, stroke, frame, alpha, group.strokeFirst)
-
-		for i := len(group.groups) - 1; i >= 0; i-- {
-			drawGroup(p, group.groups[i], frame, alpha)
-		}
-	})
-}
-
-func drawPath(p *ui.Painter, path *ui.Path, fill *fillShape, stroke *strokeShape, frame, alpha float32, strokeFirst bool) {
-	fillIt := func() {
-		if fill != nil {
-			if fill.rule == 2 {
-				path.FillRule(ui.EvenOdd)
-			}
-			p.FillPath(path, fill.color.sample(frame).ui(alpha*clamp(fill.opacity.sample(frame)/100, 0, 1)))
-		}
-	}
-	strokeIt := func() {
-		if stroke != nil {
-			width := stroke.width.sample(frame)
-			if width > 0 {
-				path.Cap([]ui.LineCap{ui.ButtCap, ui.ButtCap, ui.RoundCap, ui.SquareCap}[stroke.cap]).Join([]ui.LineJoin{ui.MiterJoin, ui.MiterJoin, ui.RoundJoin, ui.BevelJoin}[stroke.join]).MiterLimit(stroke.miter)
-				p.StrokePath(path, width, stroke.color.sample(frame).ui(alpha*clamp(stroke.opacity.sample(frame)/100, 0, 1)))
-			}
-		}
-	}
-	if strokeFirst {
-		strokeIt()
-		fillIt()
-	} else {
-		fillIt()
-		strokeIt()
-	}
-}
-
-func appendPathData(path *ui.Path, data pathData) {
-	if len(data.Vertices) == 0 || len(data.In) != len(data.Vertices) || len(data.Out) != len(data.Vertices) {
+	m := parent.mul(g.transform.at(frame))
+	if !m.finite() {
 		return
 	}
-	path.MoveTo(data.Vertices[0].X, data.Vertices[0].Y)
-	for i := 1; i < len(data.Vertices); i++ {
-		from, to := data.Vertices[i-1], data.Vertices[i]
-		cp1 := point{X: from.X + data.Out[i-1].X, Y: from.Y + data.Out[i-1].Y}
-		cp2 := point{X: to.X + data.In[i].X, Y: to.Y + data.In[i].Y}
-		path.CubeTo(cp1.X, cp1.Y, cp2.X, cp2.Y, to.X, to.Y)
+	if len(g.styles) > 0 {
+		outlines := g.outlinesAt(frame)
+		for i := len(g.styles) - 1; i >= 0; i-- {
+			g.styles[i].paint(p, path, outlines, m, frame, alpha)
+		}
 	}
-	if data.Closed {
-		last, first := data.Vertices[len(data.Vertices)-1], data.Vertices[0]
-		cp1 := point{X: last.X + data.Out[len(data.Out)-1].X, Y: last.Y + data.Out[len(data.Out)-1].Y}
-		cp2 := point{X: first.X + data.In[0].X, Y: first.Y + data.In[0].Y}
-		path.CubeTo(cp1.X, cp1.Y, cp2.X, cp2.Y, first.X, first.Y).Close()
+	for i := len(g.groups) - 1; i >= 0; i-- {
+		g.groups[i].draw(p, path, m, frame, alpha)
 	}
 }
 
+// kappa is how far along its tangents a cubic Bézier curve's control points
+// are, as a fraction of the radius, to draw a quarter of a circle.
+const kappa = 0.5522847498
+
+// rectPath returns Lottie's rectangle: centered on position, as large as
+// size's magnitude, its corners rounded by radius, at most half its
+// shorter side.
 func rectPath(position, size point, radius float32) pathData {
-	x0, y0 := position.X-size.X/2, position.Y-size.Y/2
-	x1, y1 := position.X+size.X/2, position.Y+size.Y/2
-	r := clamp(radius, 0, min(size.X, size.Y)/2)
+	hw, hh := abs(size.X)/2, abs(size.Y)/2
+	x0, y0, x1, y1 := position.X-hw, position.Y-hh, position.X+hw, position.Y+hh
+	r := clamp(radius, 0, min(hw, hh))
 	if r == 0 {
 		return pathData{
-			Vertices: []point{{X: x0, Y: y0}, {X: x1, Y: y0}, {X: x1, Y: y1}, {X: x0, Y: y1}},
-			In:       []point{{}, {}, {}, {}}, Out: []point{{}, {}, {}, {}}, Closed: true,
+			Vertices: []point{{x0, y0}, {x1, y0}, {x1, y1}, {x0, y1}},
+			In:       make([]point, 4), Out: make([]point, 4), Closed: true,
 		}
 	}
-	const k = 0.5522847498
+	k := r * kappa
 	return pathData{
-		Vertices: []point{{X: x0 + r, Y: y0}, {X: x1 - r, Y: y0}, {X: x1, Y: y0 + r}, {X: x1, Y: y1 - r}, {X: x1 - r, Y: y1}, {X: x0 + r, Y: y1}, {X: x0, Y: y1 - r}, {X: x0, Y: y0 + r}},
-		In:       []point{{X: -r * k}, {}, {Y: -r * k}, {}, {X: r * k}, {}, {Y: r * k}, {}},
-		Out:      []point{{}, {X: r * k}, {}, {Y: r * k}, {}, {X: -r * k}, {}, {Y: -r * k}},
+		Vertices: []point{{x0 + r, y0}, {x1 - r, y0}, {x1, y0 + r}, {x1, y1 - r}, {x1 - r, y1}, {x0 + r, y1}, {x0, y1 - r}, {x0, y0 + r}},
+		In:       []point{{-k, 0}, {}, {0, -k}, {}, {k, 0}, {}, {0, k}, {}},
+		Out:      []point{{}, {k, 0}, {}, {0, k}, {}, {-k, 0}, {}, {0, -k}},
 		Closed:   true,
 	}
 }
 
+// ellipsePath returns Lottie's ellipse: centered on position, as large as
+// size's magnitude.
 func ellipsePath(position, size point) pathData {
-	const k = 0.5522847498
-	rx, ry := float32(math.Abs(float64(size.X)))/2, float32(math.Abs(float64(size.Y)))/2
+	rx, ry := abs(size.X)/2, abs(size.Y)/2
 	cx, cy := position.X, position.Y
 	return pathData{
-		Vertices: []point{{X: cx + rx, Y: cy}, {X: cx, Y: cy + ry}, {X: cx - rx, Y: cy}, {X: cx, Y: cy - ry}},
-		In:       []point{{X: 0, Y: -ry * k}, {X: rx * k, Y: 0}, {X: 0, Y: ry * k}, {X: -rx * k, Y: 0}},
-		Out:      []point{{X: 0, Y: ry * k}, {X: -rx * k, Y: 0}, {X: 0, Y: -ry * k}, {X: rx * k, Y: 0}},
+		Vertices: []point{{cx + rx, cy}, {cx, cy + ry}, {cx - rx, cy}, {cx, cy - ry}},
+		In:       []point{{0, -ry * kappa}, {rx * kappa, 0}, {0, ry * kappa}, {-rx * kappa, 0}},
+		Out:      []point{{0, ry * kappa}, {-rx * kappa, 0}, {0, -ry * kappa}, {rx * kappa, 0}},
 		Closed:   true,
 	}
 }
+
+func abs(v float32) float32 { return float32(math.Abs(float64(v))) }

@@ -1,5 +1,24 @@
-// Package lottie plays a deliberately small, native subset of Lottie JSON
-// animations through MyGo's public ui painter.
+// Package lottie plays Lottie animations, a small subset of them, in native
+// UI: Load decodes the JSON once, and a Player draws it with ui's painter,
+// sharp at any size, on its own clock.
+//
+//	//go:embed success.json
+//	var data []byte
+//
+//	animation, err := lottie.Load(data)
+//	if err != nil {
+//		return err
+//	}
+//	player := animation.NewPlayer(lottie.PlayerOptions{Loop: true})
+//
+//	// In the view:
+//	ui.Box(c).Size(200, 200).Label("Saved").Draw(player.Draw)
+//
+// The subset is shape layers: paths, rectangles and ellipses with solid
+// fills and strokes, under 2D transforms, their properties static or
+// keyframed with Bézier easing. Load reports anything else that would
+// change the picture as an error rather than draw it wrong; the plugin's
+// guide (docs/plugins/lottie.md) lists what it accepts.
 package lottie
 
 import (
@@ -7,6 +26,8 @@ import (
 	"fmt"
 	"math"
 	"time"
+
+	"github.com/egoist/mygo/ui"
 )
 
 // Animation is an immutable decoded Lottie composition. Create one Player per
@@ -22,10 +43,15 @@ type Animation struct {
 	layers        []layer
 }
 
-// Duration returns the composition's playback duration.
-func (a *Animation) Duration() time.Duration { return a.duration() }
+// layer is a shape layer: a group under the layer's transform, shown from
+// its in point until its out point, in composition frames.
+type layer struct {
+	group
+	inPoint, outPoint float32
+}
 
-func (a *Animation) duration() time.Duration {
+// Duration returns the composition's playback duration.
+func (a *Animation) Duration() time.Duration {
 	if a == nil || a.frameRate <= 0 || a.outPoint <= a.inPoint {
 		return 0
 	}
@@ -35,27 +61,41 @@ func (a *Animation) duration() time.Duration {
 // Load decodes a Lottie composition. The MVP accepts shape layers with paths,
 // rectangles, ellipses, solid fills, solid strokes and 2D transforms.
 func Load(data []byte) (*Animation, error) {
-	var raw rawAnimation
+	var raw struct {
+		W      num               `json:"w"`
+		H      num               `json:"h"`
+		Fr     num               `json:"fr"`
+		Ip     num               `json:"ip"`
+		Op     num               `json:"op"`
+		Layers []json.RawMessage `json:"layers"`
+	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("lottie: decode composition: %w", err)
 	}
-	if raw.W <= 0 || raw.H <= 0 {
-		return nil, fmt.Errorf("lottie: composition size must be positive")
+	if !whole(raw.W) || !whole(raw.H) {
+		return nil, fmt.Errorf("lottie: composition width and height must be positive whole numbers")
 	}
-	if raw.Fr <= 0 || !finite(float64(raw.Fr)) {
-		return nil, fmt.Errorf("lottie: frame rate must be positive and finite")
+	if !(raw.Fr > 0) {
+		return nil, fmt.Errorf("lottie: frame rate must be positive")
 	}
-	if raw.Op <= raw.Ip {
+	if !(raw.Op > raw.Ip) {
 		return nil, fmt.Errorf("lottie: out point must be after in point")
 	}
 	duration := (float64(raw.Op) - float64(raw.Ip)) / float64(raw.Fr) * float64(time.Second)
 	if !finite(duration) || duration < 1 || duration >= float64(math.MaxInt64) {
 		return nil, fmt.Errorf("lottie: duration must fit in time.Duration")
 	}
-	anim := &Animation{width: raw.W, height: raw.H, frameRate: raw.Fr, Width: raw.W, Height: raw.H, FrameRate: raw.Fr, inPoint: raw.Ip, outPoint: raw.Op}
-	anim.layers = make([]layer, 0, len(raw.Layers))
+	w, h := int(raw.W), int(raw.H)
+	anim := &Animation{width: w, height: h, frameRate: float32(raw.Fr), Width: w, Height: h, FrameRate: float32(raw.Fr), inPoint: float32(raw.Ip), outPoint: float32(raw.Op)}
 	for i, data := range raw.Layers {
-		l, err := parseLayer(data)
+		var raw rawLayer
+		if err := json.Unmarshal(data, &raw); err != nil {
+			return nil, fmt.Errorf("lottie: layer %d: %w", i, err)
+		}
+		if raw.Hidden {
+			continue // never drawn, whatever it is
+		}
+		l, err := parseLayer(&raw)
 		if err != nil {
 			return nil, fmt.Errorf("lottie: layer %d: %w", i, err)
 		}
@@ -64,320 +104,225 @@ func Load(data []byte) (*Animation, error) {
 	return anim, nil
 }
 
-type rawAnimation struct {
-	W      int               `json:"w"`
-	H      int               `json:"h"`
-	Fr     float32           `json:"fr"`
-	Ip     float32           `json:"ip"`
-	Op     float32           `json:"op"`
-	Layers []json.RawMessage `json:"layers"`
-}
+// whole reports whether n is a positive whole number, as a composition's
+// size must be, however it is written: 100 and 100.0 alike.
+func whole(n num) bool { return n > 0 && float32(math.Trunc(float64(n))) == float32(n) }
+
+// shapeLayer is the ty of a shape layer, the only kind the subset draws.
+const shapeLayer = 4
 
 type rawLayer struct {
-	Ty     int               `json:"ty"`
-	Ip     *float32          `json:"ip"`
-	Op     *float32          `json:"op"`
-	St     float32           `json:"st"`
-	Hidden bool              `json:"hd"`
-	DDD    int               `json:"ddd"`
-	Name   string            `json:"nm"`
-	Ks     rawTransform      `json:"ks"`
-	Shapes []json.RawMessage `json:"shapes"`
+	Type    int          `json:"ty"`
+	DDD     int          `json:"ddd"`
+	Hidden  bool         `json:"hd"`
+	In      *num         `json:"ip"`
+	Out     *num         `json:"op"`
+	Stretch *num         `json:"sr"`
+	Ks      rawTransform `json:"ks"`
+	Shapes  []rawShape   `json:"shapes"`
+	// Controls outside the subset that change how a layer draws.
+	Matte       float64         `json:"tt"`
+	MatteSource float64         `json:"td"`
+	Blend       float64         `json:"bm"`
+	AutoOrient  float64         `json:"ao"`
+	Parent      json.RawMessage `json:"parent"`
+	Masks       json.RawMessage `json:"masksProperties"`
+	Effects     json.RawMessage `json:"ef"`
+	TimeRemap   json.RawMessage `json:"tm"`
+	// A layer's start time (st) offsets the frames of what a precomp
+	// shows, which the subset rejects; a shape layer's keyframes and in
+	// and out points are in composition frames, so Load ignores it.
 }
 
-type rawTransform struct {
-	Sk, Sa, Rx, Ry, Rz, Or json.RawMessage
-	Anchor                 json.RawMessage `json:"a"`
-	Position               json.RawMessage `json:"p"`
-	Scale                  json.RawMessage `json:"s"`
-	Rotation               json.RawMessage `json:"r"`
-	Opacity                json.RawMessage `json:"o"`
+// rawShape is a shape item with the fields of every type the subset reads,
+// so that Load decodes each item, and the groups nested in it, once. What
+// a key means depends on the type: p is a position; s a rectangle's or an
+// ellipse's size and a transform's scale; r a rectangle's roundness, a
+// fill's rule and a transform's rotation; o an opacity; d a direction, or
+// a stroke's dashes.
+type rawShape struct {
+	rawTransform
+	Type   string          `json:"ty"`
+	Hidden bool            `json:"hd"`
+	Blend  float64         `json:"bm"`
+	Items  []rawShape      `json:"it"`
+	Path   json.RawMessage `json:"ks"`
+	Color  json.RawMessage `json:"c"`
+	Width  json.RawMessage `json:"w"`
+	Cap    int             `json:"lc"`
+	Join   int             `json:"lj"`
+	Miter  *num            `json:"ml"`
+	D      json.RawMessage `json:"d"`
 }
 
-type layer struct {
-	name                     string
-	inPoint, outPoint, start float32
-	hidden                   bool
-	opacity                  scalarProperty
-	transform                transform
-	groups                   []group
-}
-
-type transform struct {
-	anchor   pointProperty
-	position pointProperty
-	scale    pointProperty
-	rotation scalarProperty
-	opacity  scalarProperty
-}
-
-type group struct {
-	transform   transform
-	paths       []pathShape
-	rects       []rectShape
-	strokeFirst bool
-	ellipses    []ellipseShape
-	fills       []fillShape
-	strokes     []strokeShape
-	groups      []group
-}
-
-type pathShape struct{ path pathProperty }
-
-type rectShape struct {
-	position pointProperty
-	size     pointProperty
-	radius   scalarProperty
-}
-
-type ellipseShape struct {
-	position pointProperty
-	size     pointProperty
-}
-
-type fillShape struct {
-	rule    int
-	color   colorProperty
-	opacity scalarProperty
-}
-
-type strokeShape struct {
-	cap, join int
-	miter     float32
-	color     colorProperty
-	opacity   scalarProperty
-	width     scalarProperty
-}
-
-func parseLayer(data json.RawMessage) (layer, error) {
-	if err := validateLayer(data); err != nil {
+func parseLayer(raw *rawLayer) (layer, error) {
+	if err := raw.unsupported(); err != nil {
 		return layer{}, err
-	}
-	var raw rawLayer
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return layer{}, err
-	}
-	if raw.Ty != 4 {
-		return layer{}, fmt.Errorf("unsupported layer type %d", raw.Ty)
-	}
-	if raw.DDD != 0 {
-		return layer{}, fmt.Errorf("unsupported 3D layer")
 	}
 	tr, err := parseTransform(raw.Ks)
 	if err != nil {
 		return layer{}, err
 	}
-	opacity, err := parseScalar(raw.Ks.Opacity, 100)
-	if err != nil {
-		return layer{}, fmt.Errorf("layer opacity: %w", err)
-	}
-	l := layer{name: raw.Name, transform: tr, opacity: opacity, start: raw.St, hidden: raw.Hidden, inPoint: -math.MaxFloat32, outPoint: math.MaxFloat32}
-	if raw.Ip != nil {
-		l.inPoint = *raw.Ip
-	}
-	if raw.Op != nil {
-		l.outPoint = *raw.Op
-	}
-	root, err := parseGroup(raw.Shapes)
+	shapes, err := parseGroup(raw.Shapes, 0)
 	if err != nil {
 		return layer{}, err
 	}
-	l.groups = []group{root}
+	l := layer{group: group{transform: tr, groups: []group{shapes}}, inPoint: -math.MaxFloat32, outPoint: math.MaxFloat32}
+	if raw.In != nil {
+		l.inPoint = float32(*raw.In)
+	}
+	if raw.Out != nil {
+		l.outPoint = float32(*raw.Out)
+	}
 	return l, nil
 }
 
-func parseTransform(raw rawTransform) (transform, error) {
-	for _, v := range []json.RawMessage{raw.Sk, raw.Sa} {
-		if len(v) == 0 {
+// parseGroup reads a group's items, depth groups deep. Styles paint the
+// geometry before them in a group; the subset supports one fill and one
+// stroke of all of it, or child groups styled on their own, without
+// inheritance. Hidden items are never drawn, whatever they are.
+func parseGroup(items []rawShape, depth int) (group, error) {
+	if depth > maxGroupDepth {
+		return group{}, fmt.Errorf("shape groups nest deeper than %d", maxGroupDepth)
+	}
+	var g group
+	var tr *rawTransform
+	var fills, strokes int
+	for i := range items {
+		it := &items[i]
+		if it.Hidden {
 			continue
 		}
-		neutral, err := parseScalar(v, 0)
-		if err != nil || len(neutral.keys) != 0 || neutral.static != 0 {
-			return transform{}, fmt.Errorf("unsupported skew transform")
+		if it.Blend != 0 {
+			return group{}, fmt.Errorf("item %d: unsupported blend mode", i)
 		}
-	}
-	for _, v := range []json.RawMessage{raw.Rx, raw.Ry, raw.Rz, raw.Or} {
-		if len(v) > 0 {
-			return transform{}, fmt.Errorf("unsupported skew or 3D transform")
-		}
-	}
-	anchor, err := parsePoint(raw.Anchor, point{})
-	if err != nil {
-		return transform{}, fmt.Errorf("anchor: %w", err)
-	}
-	position, err := parsePoint(raw.Position, point{})
-	if err != nil {
-		return transform{}, fmt.Errorf("position: %w", err)
-	}
-	scale, err := parsePoint(raw.Scale, point{X: 100, Y: 100})
-	if err != nil {
-		return transform{}, fmt.Errorf("scale: %w", err)
-	}
-	rotation, err := parseScalar(raw.Rotation, 0)
-	if err != nil {
-		return transform{}, fmt.Errorf("rotation: %w", err)
-	}
-	opacity, err := parseScalar(raw.Opacity, 100)
-	if err != nil {
-		return transform{}, fmt.Errorf("opacity: %w", err)
-	}
-	return transform{anchor: anchor, position: position, scale: scale, rotation: rotation, opacity: opacity}, nil
-}
-
-func parseGroup(items []json.RawMessage) (group, error) {
-	if err := validateGroup(items); err != nil {
-		return group{}, err
-	}
-	g := group{transform: defaultTransform()}
-	for i, data := range items {
-		var header struct {
-			Type   string            `json:"ty"`
-			Hidden bool              `json:"hd"`
-			It     []json.RawMessage `json:"it"`
-		}
-		if err := json.Unmarshal(data, &header); err != nil {
-			return group{}, fmt.Errorf("item %d: %w", i, err)
-		}
-		if header.Hidden {
-			switch header.Type {
-			case "gr", "tr", "sh", "rc", "el", "fl", "st":
-				continue
-			}
-		}
-		if header.Type == "tr" {
-			var raw rawTransform
-			if err := json.Unmarshal(data, &raw); err != nil {
-				return group{}, fmt.Errorf("transform: %w", err)
-			}
-			tr, err := parseTransform(raw)
-			if err != nil {
-				return group{}, fmt.Errorf("transform: %w", err)
-			}
-			g.transform = tr
-			continue
-		}
-		if header.Type == "gr" {
-			nested, err := parseGroup(header.It)
-			if err != nil {
+		var err error
+		switch it.Type {
+		case "gr":
+			var child group
+			if child, err = parseGroup(it.Items, depth+1); err != nil {
 				return group{}, fmt.Errorf("nested group %d: %w", i, err)
 			}
-			g.groups = append(g.groups, nested)
-			continue
-		}
-		if err := addShape(&g, data, header.Type); err != nil {
-			return group{}, fmt.Errorf("item %d: %w", i, err)
+			g.groups = append(g.groups, child)
+		case "tr":
+			if tr != nil {
+				return group{}, fmt.Errorf("unsupported multiple transforms")
+			}
+			tr = &it.rawTransform
+		case "sh", "rc", "el":
+			if fills+strokes > 0 {
+				return group{}, fmt.Errorf("unsupported interleaved geometry and styles")
+			}
+			var s geometry
+			if s, err = parseGeometry(it); err != nil {
+				return group{}, fmt.Errorf("item %d: %w", i, err)
+			}
+			g.geometry = append(g.geometry, s)
+		case "fl", "st":
+			if it.Type == "fl" {
+				fills++
+			} else {
+				strokes++
+			}
+			if fills > 1 || strokes > 1 {
+				return group{}, fmt.Errorf("unsupported multiple fills or strokes")
+			}
+			var s style
+			if s, err = parseStyle(it); err != nil {
+				return group{}, fmt.Errorf("item %d: %w", i, err)
+			}
+			g.styles = append(g.styles, s)
+		default:
+			return group{}, fmt.Errorf("item %d: unsupported shape type %q", i, it.Type)
 		}
 	}
+	if len(g.groups) > 0 && len(g.geometry)+len(g.styles) > 0 {
+		return group{}, fmt.Errorf("unsupported parent group style inheritance or mixed geometry")
+	}
+	if tr == nil {
+		tr = &rawTransform{}
+	}
+	var err error
+	if g.transform, err = parseTransform(*tr); err != nil {
+		return group{}, fmt.Errorf("transform: %w", err)
+	}
+	g.retain()
 	return g, nil
 }
 
-func addShape(g *group, data json.RawMessage, typ string) error {
-	switch typ {
-	case "sh":
-		var raw struct {
-			KS json.RawMessage `json:"ks"`
+// parseGeometry reads a path, rectangle or ellipse, drawn in its default
+// direction (d 1, or none).
+func parseGeometry(it *rawShape) (geometry, error) {
+	var direction int
+	if len(it.D) > 0 {
+		if err := json.Unmarshal(it.D, &direction); err != nil || direction != 0 && direction != 1 {
+			return nil, fmt.Errorf("unsupported shape direction %s", it.D)
 		}
-		if err := json.Unmarshal(data, &raw); err != nil {
-			return err
-		}
-		path, err := parsePath(raw.KS)
-		if err != nil {
-			return err
-		}
-		g.paths = append(g.paths, pathShape{path: path})
-	case "rc":
-		var raw struct {
-			P json.RawMessage `json:"p"`
-			S json.RawMessage `json:"s"`
-			R json.RawMessage `json:"r"`
-		}
-		if err := json.Unmarshal(data, &raw); err != nil {
-			return err
-		}
-		position, err := parsePoint(raw.P, point{})
-		if err != nil {
-			return fmt.Errorf("rectangle position: %w", err)
-		}
-		size, err := parsePoint(raw.S, point{})
-		if err != nil {
-			return fmt.Errorf("rectangle size: %w", err)
-		}
-		radius, err := parseScalar(raw.R, 0)
-		if err != nil {
-			return fmt.Errorf("rectangle radius: %w", err)
-		}
-		g.rects = append(g.rects, rectShape{position: position, size: size, radius: radius})
-	case "el":
-		var raw struct {
-			P json.RawMessage `json:"p"`
-			S json.RawMessage `json:"s"`
-		}
-		if err := json.Unmarshal(data, &raw); err != nil {
-			return err
-		}
-		position, err := parsePoint(raw.P, point{})
-		if err != nil {
-			return fmt.Errorf("ellipse position: %w", err)
-		}
-		size, err := parsePoint(raw.S, point{})
-		if err != nil {
-			return fmt.Errorf("ellipse size: %w", err)
-		}
-		g.ellipses = append(g.ellipses, ellipseShape{position: position, size: size})
-	case "fl":
-		var raw struct {
-			Rule int             `json:"r"`
-			C    json.RawMessage `json:"c"`
-			O    json.RawMessage `json:"o"`
-		}
-		if err := json.Unmarshal(data, &raw); err != nil {
-			return err
-		}
-		c, err := parseColor(raw.C, color{A: 1})
-		if err != nil {
-			return fmt.Errorf("fill color: %w", err)
-		}
-		o, err := parseScalar(raw.O, 100)
-		if err != nil {
-			return fmt.Errorf("fill opacity: %w", err)
-		}
-		if raw.Rule < 0 || raw.Rule > 2 {
-			return fmt.Errorf("unsupported fill rule")
-		}
-		g.strokeFirst = len(g.strokes) == 0
-		g.fills = append(g.fills, fillShape{rule: raw.Rule, color: c, opacity: o})
-	case "st":
-		var raw struct {
-			Cap   int             `json:"lc"`
-			Join  int             `json:"lj"`
-			Miter float32         `json:"ml"`
-			C     json.RawMessage `json:"c"`
-			O     json.RawMessage `json:"o"`
-			W     json.RawMessage `json:"w"`
-		}
-		if err := json.Unmarshal(data, &raw); err != nil {
-			return err
-		}
-		c, err := parseColor(raw.C, color{A: 1})
-		if err != nil {
-			return fmt.Errorf("stroke color: %w", err)
-		}
-		o, err := parseScalar(raw.O, 100)
-		if err != nil {
-			return fmt.Errorf("stroke opacity: %w", err)
-		}
-		w, err := parseScalar(raw.W, 1)
-		if err != nil {
-			return fmt.Errorf("stroke width: %w", err)
-		}
-		if raw.Cap < 0 || raw.Cap > 3 || raw.Join < 0 || raw.Join > 3 {
-			return fmt.Errorf("unsupported stroke cap or join")
-		}
-		g.strokes = append(g.strokes, strokeShape{cap: raw.Cap, join: raw.Join, miter: raw.Miter, color: c, opacity: o, width: w})
-	default:
-		return fmt.Errorf("unsupported shape type %q", typ)
 	}
-	return nil
+	if it.Type == "sh" {
+		path, err := parsePath(it.Path)
+		return pathShape{path}, err
+	}
+	position, err := parsePoint(it.P, point{})
+	if err != nil {
+		return nil, fmt.Errorf("position: %w", err)
+	}
+	size, err := parsePoint(it.S, point{})
+	if err != nil {
+		return nil, fmt.Errorf("size: %w", err)
+	}
+	if it.Type == "el" {
+		return ellipseShape{position, size}, nil
+	}
+	radius, err := parseScalar(it.R, 0)
+	if err != nil {
+		return nil, fmt.Errorf("roundness: %w", err)
+	}
+	return rectShape{position, size, radius}, nil
+}
+
+// Lottie's fill rules (r), line caps (lc) and line joins (lj), by number;
+// 0 is a missing one.
+var (
+	fillRules = [...]ui.FillRule{0: ui.NonZero, 1: ui.NonZero, 2: ui.EvenOdd}
+	lineCaps  = [...]ui.LineCap{0: ui.ButtCap, 1: ui.ButtCap, 2: ui.RoundCap, 3: ui.SquareCap}
+	lineJoins = [...]ui.LineJoin{0: ui.MiterJoin, 1: ui.MiterJoin, 2: ui.RoundJoin, 3: ui.BevelJoin}
+)
+
+// parseStyle reads a solid fill or stroke.
+func parseStyle(it *rawShape) (style, error) {
+	c, err := parseColor(it.Color, color{A: 1})
+	if err != nil {
+		return nil, fmt.Errorf("color: %w", err)
+	}
+	o, err := parseScalar(it.O, 100)
+	if err != nil {
+		return nil, fmt.Errorf("opacity: %w", err)
+	}
+	if it.Type == "fl" {
+		var rule int
+		if len(it.R) > 0 {
+			if err := json.Unmarshal(it.R, &rule); err != nil || rule < 0 || rule >= len(fillRules) {
+				return nil, fmt.Errorf("unsupported fill rule %s", it.R)
+			}
+		}
+		return &fill{rule: fillRules[rule], color: c, opacity: o}, nil
+	}
+	if present(it.D) {
+		return nil, fmt.Errorf("unsupported stroke dashes")
+	}
+	w, err := parseScalar(it.Width, 1)
+	if err != nil {
+		return nil, fmt.Errorf("stroke width: %w", err)
+	}
+	if it.Cap < 0 || it.Cap >= len(lineCaps) || it.Join < 0 || it.Join >= len(lineJoins) {
+		return nil, fmt.Errorf("unsupported stroke cap or join")
+	}
+	miter := float32(4) // Lottie's default, as SVG's
+	if it.Miter != nil {
+		miter = float32(*it.Miter)
+	}
+	return &stroke{cap: lineCaps[it.Cap], join: lineJoins[it.Join], miter: miter, color: c, opacity: o, width: w}, nil
 }
 
 func finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }

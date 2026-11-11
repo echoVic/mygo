@@ -3,113 +3,161 @@ package lottie
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
+	"strconv"
 )
 
-// These controls change the interpretation of geometry. Reject them before
-// normalization rather than displaying a plausible but incorrect partial image.
-func rejectControls(data json.RawMessage, numeric []string, present []string) error {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err != nil {
-		return err
+// maxMagnitude bounds every number Load accepts, whatever it is: a
+// coordinate, a scale, a color channel, a keyframe's time or an easing
+// control. Up to it float32 still holds whole numbers exactly; past it a
+// Lottie file means nothing a screen could show, and its products would
+// overflow float32.
+const maxMagnitude = 1e7
+
+// maxGroupDepth is how deep shape groups may nest, which bounds the
+// recursion of Load and Draw.
+const maxGroupDepth = 32
+
+// num is a number of the JSON. Every number Load reads is one, so that the
+// bound is checked in this one place.
+type num float32
+
+func (n *num) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		return nil
 	}
-	for _, key := range numeric {
-		if raw := fields[key]; len(raw) > 0 {
-			var value float64
-			if err := json.Unmarshal(raw, &value); err != nil {
-				return fmt.Errorf("unsupported %s", key)
-			}
-			if value != 0 {
-				return fmt.Errorf("unsupported %s", key)
-			}
-		}
+	v, err := strconv.ParseFloat(string(data), 64)
+	if err != nil && !errors.Is(err, strconv.ErrRange) {
+		return fmt.Errorf("want a number, got %.20s", data)
 	}
-	for _, key := range present {
-		if raw := fields[key]; len(raw) > 0 && !bytes.Equal(raw, []byte("null")) && !bytes.Equal(raw, []byte("[]")) {
-			return fmt.Errorf("unsupported %s", key)
-		}
+	if !(math.Abs(v) <= maxMagnitude) {
+		return fmt.Errorf("number %s is outside ±%g", data, float64(maxMagnitude))
 	}
+	*n = num(v)
 	return nil
 }
 
-func validateLayer(data json.RawMessage) error {
-	if err := rejectControls(data, []string{"tt", "td", "bm", "ao"}, []string{"parent", "masksProperties", "ef", "tm"}); err != nil {
-		return err
+// numbers decodes a value as Lottie writes it, a number or an array of
+// them, wanting at least n.
+func numbers(data json.RawMessage, n int) ([]num, error) {
+	var values []num
+	if len(data) > 0 && data[0] == '[' {
+		if err := json.Unmarshal(data, &values); err != nil {
+			return nil, err
+		}
+	} else {
+		var v num
+		if err := json.Unmarshal(data, &v); err != nil {
+			return nil, err
+		}
+		values = []num{v}
 	}
-	var v struct {
-		Stretch *float32 `json:"sr"`
+	if len(values) < n {
+		return nil, fmt.Errorf("want at least %d numbers, got %d", n, len(values))
 	}
-	if err := json.Unmarshal(data, &v); err != nil {
-		return err
-	}
-	if v.Stretch != nil && *v.Stretch != 1 {
+	return values, nil
+}
+
+// present reports whether a control is set: not missing, null or empty.
+func present(raw json.RawMessage) bool {
+	return len(raw) > 0 && !bytes.Equal(raw, []byte("null")) && !bytes.Equal(raw, []byte("[]"))
+}
+
+// unsupported rejects the controls of a layer that change how it draws,
+// outside the subset, rather than show a plausible but wrong image.
+func (l *rawLayer) unsupported() error {
+	switch {
+	case l.Type != shapeLayer:
+		return fmt.Errorf("unsupported layer type %d", l.Type)
+	case l.DDD != 0:
+		return fmt.Errorf("unsupported 3D layer")
+	case l.Matte != 0:
+		return fmt.Errorf("unsupported track matte (tt)")
+	case l.MatteSource != 0:
+		return fmt.Errorf("unsupported matte source (td)")
+	case l.Blend != 0:
+		return fmt.Errorf("unsupported blend mode (bm)")
+	case l.AutoOrient != 0:
+		return fmt.Errorf("unsupported auto-orient (ao)")
+	case l.Stretch != nil && *l.Stretch != 1:
 		return fmt.Errorf("unsupported layer time stretch")
+	case present(l.Parent):
+		return fmt.Errorf("unsupported parent")
+	case present(l.Masks):
+		return fmt.Errorf("unsupported masks")
+	case present(l.Effects):
+		return fmt.Errorf("unsupported effects")
+	case present(l.TimeRemap):
+		return fmt.Errorf("unsupported time remapping")
 	}
 	return nil
 }
 
-// Shape styles apply to the preceding geometry in a group. The MVP supports
-// one shared fill and stroke, or independent child groups, without inheritance.
-func validateGroup(items []json.RawMessage) error {
-	var geometry, groups, fills, strokes, transform bool
-	for _, raw := range items {
-		var h struct {
-			Type   string `json:"ty"`
-			Hidden bool   `json:"hd"`
+// decodeProperty decodes a property's envelope, rejecting expressions and
+// positions split into separate dimensions.
+func decodeProperty(data json.RawMessage) (rawProperty, error) {
+	var raw rawProperty
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return raw, err
+	}
+	if raw.Split || present(raw.Expression) && !bytes.Equal(raw.Expression, []byte(`""`)) {
+		return raw, fmt.Errorf("unsupported expression or split position")
+	}
+	if raw.Animated != 0 && raw.Animated != 1 {
+		return raw, fmt.Errorf("unsupported animation flag %d", raw.Animated)
+	}
+	return raw, nil
+}
+
+// decodeKeyframes decodes an animated property's keyframes: at least one,
+// at increasing times, without spatial tangents or easing per component.
+// A last keyframe without a value, as exporters end a property, takes the
+// previous one's end.
+func decodeKeyframes(data json.RawMessage) ([]rawKeyframe, error) {
+	var frames []rawKeyframe
+	if err := json.Unmarshal(data, &frames); err != nil {
+		return nil, err
+	}
+	if len(frames) == 0 {
+		return nil, fmt.Errorf("animated property has no keyframes")
+	}
+	for i := range frames {
+		f := &frames[i]
+		if i > 0 && !(f.T > frames[i-1].T) {
+			return nil, fmt.Errorf("keyframe times must increase")
 		}
-		if err := json.Unmarshal(raw, &h); err != nil {
-			return err
+		for _, tangent := range []json.RawMessage{f.To, f.Ti} {
+			if len(tangent) == 0 {
+				continue
+			}
+			values, err := numbers(tangent, 0)
+			if err != nil {
+				return nil, fmt.Errorf("invalid spatial tangents: %w", err)
+			}
+			for _, v := range values {
+				if v != 0 {
+					return nil, fmt.Errorf("unsupported spatial tangents")
+				}
+			}
 		}
-		if err := rejectControls(raw, []string{"bm"}, nil); err != nil {
-			return err
+		for _, controls := range [][]float32{f.I.X, f.I.Y, f.O.X, f.O.Y} {
+			for _, v := range controls {
+				if v != controls[0] {
+					return nil, fmt.Errorf("unsupported component-specific easing")
+				}
+			}
 		}
-		switch h.Type {
-		case "tr":
-			if !h.Hidden {
-				if transform {
-					return fmt.Errorf("unsupported multiple transforms")
-				}
-				transform = true
+		if !present(f.S) {
+			if i != len(frames)-1 || i == 0 {
+				return nil, fmt.Errorf("keyframe missing start value")
 			}
-		case "rc", "el", "sh":
-			var direction struct {
-				D int `json:"d"`
-			}
-			if err := json.Unmarshal(raw, &direction); err != nil {
-				return err
-			}
-			if direction.D != 0 && direction.D != 1 {
-				return fmt.Errorf("unsupported shape direction %d", direction.D)
-			}
-			if !h.Hidden {
-				if fills || strokes {
-					return fmt.Errorf("unsupported interleaved geometry and styles")
-				}
-				geometry = true
-			}
-		case "gr":
-			groups = true
-		case "fl":
-			if !h.Hidden {
-				if fills {
-					return fmt.Errorf("unsupported multiple fills")
-				}
-				fills = true
-			}
-		case "st":
-			if err := rejectControls(raw, nil, []string{"d"}); err != nil {
-				return err
-			}
-			if !h.Hidden {
-				if strokes {
-					return fmt.Errorf("unsupported multiple strokes")
-				}
-				strokes = true
+			f.S = frames[i-1].E
+			if len(f.S) == 0 {
+				f.S = frames[i-1].S
 			}
 		}
 	}
-	if groups && (geometry || fills || strokes) {
-		return fmt.Errorf("unsupported parent group style inheritance or mixed geometry")
-	}
-	return nil
+	return frames, nil
 }

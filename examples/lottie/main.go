@@ -18,9 +18,11 @@ import (
 //go:embed orbit.json
 var animationData []byte
 
-type gallery struct{ player *lottie.Player }
+// demo shows the animation through its player, with buttons for the
+// player's controls.
+type demo struct{ player *lottie.Player }
 
-func (g *gallery) view(c *ui.Context) {
+func (g *demo) view(c *ui.Context) {
 	t := c.Theme()
 	ui.Column(c).Fill().Center().Gap(16).Children(func() {
 		ui.Text(c, "Lottie, drawn by MyGo").FontSize(22).Bold()
@@ -52,7 +54,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	g := &gallery{player: animation.NewPlayer(lottie.PlayerOptions{Loop: true})}
+	g := &demo{player: animation.NewPlayer(lottie.PlayerOptions{Loop: true})}
 	mygo.App.WhenReady(func() {
 		mygo.NewWindow(mygo.WindowOptions{
 			Title: "Lottie", Width: 460, Height: 450, Content: ui.View(g.view),

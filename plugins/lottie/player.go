@@ -36,7 +36,7 @@ func (a *Animation) NewPlayer(options ...PlayerOptions) *Player {
 		o = options[0]
 	}
 	speed := float64(o.Speed)
-	if speed <= 0 || math.IsNaN(speed) || math.IsInf(speed, 0) {
+	if !(speed > 0) || !finite(speed) {
 		speed = 1
 	}
 	return &Player{animation: a, loop: o.Loop, speed: speed}
