@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"math"
 	"time"
-
-	"github.com/egoist/mygo/ui"
 )
 
 // Animation is an immutable decoded Lottie composition. Create one Player per
@@ -17,19 +15,21 @@ type Animation struct {
 	Width, Height int
 	FrameRate     float32
 
-	inPoint  float32
-	outPoint float32
-	layers   []layer
+	width, height int
+	frameRate     float32
+	inPoint       float32
+	outPoint      float32
+	layers        []layer
 }
 
 // Duration returns the composition's playback duration.
 func (a *Animation) Duration() time.Duration { return a.duration() }
 
 func (a *Animation) duration() time.Duration {
-	if a == nil || a.FrameRate <= 0 || a.outPoint <= a.inPoint {
+	if a == nil || a.frameRate <= 0 || a.outPoint <= a.inPoint {
 		return 0
 	}
-	return time.Duration(math.Round(float64(a.outPoint-a.inPoint) / float64(a.FrameRate) * float64(time.Second)))
+	return time.Duration(math.Round((float64(a.outPoint) - float64(a.inPoint)) / float64(a.frameRate) * float64(time.Second)))
 }
 
 // Load decodes a Lottie composition. The MVP accepts shape layers with paths,
@@ -48,7 +48,11 @@ func Load(data []byte) (*Animation, error) {
 	if raw.Op <= raw.Ip {
 		return nil, fmt.Errorf("lottie: out point must be after in point")
 	}
-	anim := &Animation{Width: raw.W, Height: raw.H, FrameRate: raw.Fr, inPoint: raw.Ip, outPoint: raw.Op}
+	duration := (float64(raw.Op) - float64(raw.Ip)) / float64(raw.Fr) * float64(time.Second)
+	if !finite(duration) || duration < 1 || duration >= float64(math.MaxInt64) {
+		return nil, fmt.Errorf("lottie: duration must fit in time.Duration")
+	}
+	anim := &Animation{width: raw.W, height: raw.H, frameRate: raw.Fr, Width: raw.W, Height: raw.H, FrameRate: raw.Fr, inPoint: raw.Ip, outPoint: raw.Op}
 	anim.layers = make([]layer, 0, len(raw.Layers))
 	for i, data := range raw.Layers {
 		l, err := parseLayer(data)
@@ -82,11 +86,12 @@ type rawLayer struct {
 }
 
 type rawTransform struct {
-	Anchor   json.RawMessage `json:"a"`
-	Position json.RawMessage `json:"p"`
-	Scale    json.RawMessage `json:"s"`
-	Rotation json.RawMessage `json:"r"`
-	Opacity  json.RawMessage `json:"o"`
+	Sk, Sa, Rx, Ry, Rz, Or json.RawMessage
+	Anchor                 json.RawMessage `json:"a"`
+	Position               json.RawMessage `json:"p"`
+	Scale                  json.RawMessage `json:"s"`
+	Rotation               json.RawMessage `json:"r"`
+	Opacity                json.RawMessage `json:"o"`
 }
 
 type layer struct {
@@ -107,13 +112,14 @@ type transform struct {
 }
 
 type group struct {
-	transform transform
-	paths     []pathShape
-	rects     []rectShape
-	ellipses  []ellipseShape
-	fills     []fillShape
-	strokes   []strokeShape
-	groups    []group
+	transform   transform
+	paths       []pathShape
+	rects       []rectShape
+	strokeFirst bool
+	ellipses    []ellipseShape
+	fills       []fillShape
+	strokes     []strokeShape
+	groups      []group
 }
 
 type pathShape struct{ path pathProperty }
@@ -130,17 +136,23 @@ type ellipseShape struct {
 }
 
 type fillShape struct {
+	rule    int
 	color   colorProperty
 	opacity scalarProperty
 }
 
 type strokeShape struct {
-	color   colorProperty
-	opacity scalarProperty
-	width   scalarProperty
+	cap, join int
+	miter     float32
+	color     colorProperty
+	opacity   scalarProperty
+	width     scalarProperty
 }
 
 func parseLayer(data json.RawMessage) (layer, error) {
+	if err := validateLayer(data); err != nil {
+		return layer{}, err
+	}
 	var raw rawLayer
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return layer{}, err
@@ -170,15 +182,25 @@ func parseLayer(data json.RawMessage) (layer, error) {
 	if err != nil {
 		return layer{}, err
 	}
-	if len(root.paths)+len(root.rects)+len(root.ellipses)+len(root.fills)+len(root.strokes) == 0 {
-		l.groups = root.groups
-	} else {
-		l.groups = []group{root}
-	}
+	l.groups = []group{root}
 	return l, nil
 }
 
 func parseTransform(raw rawTransform) (transform, error) {
+	for _, v := range []json.RawMessage{raw.Sk, raw.Sa} {
+		if len(v) == 0 {
+			continue
+		}
+		neutral, err := parseScalar(v, 0)
+		if err != nil || len(neutral.keys) != 0 || neutral.static != 0 {
+			return transform{}, fmt.Errorf("unsupported skew transform")
+		}
+	}
+	for _, v := range []json.RawMessage{raw.Rx, raw.Ry, raw.Rz, raw.Or} {
+		if len(v) > 0 {
+			return transform{}, fmt.Errorf("unsupported skew or 3D transform")
+		}
+	}
 	anchor, err := parsePoint(raw.Anchor, point{})
 	if err != nil {
 		return transform{}, fmt.Errorf("anchor: %w", err)
@@ -203,14 +225,24 @@ func parseTransform(raw rawTransform) (transform, error) {
 }
 
 func parseGroup(items []json.RawMessage) (group, error) {
+	if err := validateGroup(items); err != nil {
+		return group{}, err
+	}
 	g := group{transform: defaultTransform()}
 	for i, data := range items {
 		var header struct {
-			Type string            `json:"ty"`
-			It   []json.RawMessage `json:"it"`
+			Type   string            `json:"ty"`
+			Hidden bool              `json:"hd"`
+			It     []json.RawMessage `json:"it"`
 		}
 		if err := json.Unmarshal(data, &header); err != nil {
 			return group{}, fmt.Errorf("item %d: %w", i, err)
+		}
+		if header.Hidden {
+			switch header.Type {
+			case "gr", "tr", "sh", "rc", "el", "fl", "st":
+				continue
+			}
 		}
 		if header.Type == "tr" {
 			var raw rawTransform
@@ -294,8 +326,9 @@ func addShape(g *group, data json.RawMessage, typ string) error {
 		g.ellipses = append(g.ellipses, ellipseShape{position: position, size: size})
 	case "fl":
 		var raw struct {
-			C json.RawMessage `json:"c"`
-			O json.RawMessage `json:"o"`
+			Rule int             `json:"r"`
+			C    json.RawMessage `json:"c"`
+			O    json.RawMessage `json:"o"`
 		}
 		if err := json.Unmarshal(data, &raw); err != nil {
 			return err
@@ -308,12 +341,19 @@ func addShape(g *group, data json.RawMessage, typ string) error {
 		if err != nil {
 			return fmt.Errorf("fill opacity: %w", err)
 		}
-		g.fills = append(g.fills, fillShape{color: c, opacity: o})
+		if raw.Rule < 0 || raw.Rule > 2 {
+			return fmt.Errorf("unsupported fill rule")
+		}
+		g.strokeFirst = len(g.strokes) == 0
+		g.fills = append(g.fills, fillShape{rule: raw.Rule, color: c, opacity: o})
 	case "st":
 		var raw struct {
-			C json.RawMessage `json:"c"`
-			O json.RawMessage `json:"o"`
-			W json.RawMessage `json:"w"`
+			Cap   int             `json:"lc"`
+			Join  int             `json:"lj"`
+			Miter float32         `json:"ml"`
+			C     json.RawMessage `json:"c"`
+			O     json.RawMessage `json:"o"`
+			W     json.RawMessage `json:"w"`
 		}
 		if err := json.Unmarshal(data, &raw); err != nil {
 			return err
@@ -330,7 +370,10 @@ func addShape(g *group, data json.RawMessage, typ string) error {
 		if err != nil {
 			return fmt.Errorf("stroke width: %w", err)
 		}
-		g.strokes = append(g.strokes, strokeShape{color: c, opacity: o, width: w})
+		if raw.Cap < 0 || raw.Cap > 3 || raw.Join < 0 || raw.Join > 3 {
+			return fmt.Errorf("unsupported stroke cap or join")
+		}
+		g.strokes = append(g.strokes, strokeShape{cap: raw.Cap, join: raw.Join, miter: raw.Miter, color: c, opacity: o, width: w})
 	default:
 		return fmt.Errorf("unsupported shape type %q", typ)
 	}
@@ -338,7 +381,3 @@ func addShape(g *group, data json.RawMessage, typ string) error {
 }
 
 func finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
-
-// Keep the public ui dependency visible in this file's package documentation;
-// drawing methods are added in shape.go.
-var _ *ui.Painter

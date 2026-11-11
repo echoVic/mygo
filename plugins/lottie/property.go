@@ -1,6 +1,7 @@
 package lottie
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -19,22 +20,49 @@ type color struct {
 type easing func(float32) float32
 
 type rawProperty struct {
-	Animated int             `json:"a"`
-	K        json.RawMessage `json:"k"`
+	Expression json.RawMessage `json:"x"`
+	Split      bool            `json:"s"`
+	Animated   int             `json:"a"`
+	K          json.RawMessage `json:"k"`
 }
 
-type rawBezier struct {
-	X []float32 `json:"x"`
-	Y []float32 `json:"y"`
+type rawBezier struct{ X, Y []float32 }
+
+func (b *rawBezier) UnmarshalJSON(data []byte) error {
+	var raw struct{ X, Y json.RawMessage }
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	for _, v := range []struct {
+		raw json.RawMessage
+		dst *[]float32
+	}{{raw.X, &b.X}, {raw.Y, &b.Y}} {
+		if len(v.raw) == 0 {
+			continue
+		}
+		if v.raw[0] == '[' {
+			if err := json.Unmarshal(v.raw, v.dst); err != nil {
+				return err
+			}
+		} else {
+			var n float32
+			if err := json.Unmarshal(v.raw, &n); err != nil {
+				return err
+			}
+			*v.dst = []float32{n}
+		}
+	}
+	return nil
 }
 
 type rawKeyframe struct {
-	T float32         `json:"t"`
-	S json.RawMessage `json:"s"`
-	E json.RawMessage `json:"e"`
-	H int             `json:"h"`
-	I rawBezier       `json:"i"`
-	O rawBezier       `json:"o"`
+	To, Ti json.RawMessage
+	T      float32         `json:"t"`
+	S      json.RawMessage `json:"s"`
+	E      json.RawMessage `json:"e"`
+	H      int             `json:"h"`
+	I      rawBezier       `json:"i"`
+	O      rawBezier       `json:"o"`
 }
 
 type scalarKeyframe struct {
@@ -223,7 +251,7 @@ func parseScalar(data json.RawMessage, def float32) (scalarProperty, error) {
 		return scalarProperty{static: def}, nil
 	}
 	var raw rawProperty
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := decodeProperty(data, &raw); err != nil {
 		return scalarProperty{}, fmt.Errorf("property: %w", err)
 	}
 	if raw.Animated == 0 {
@@ -234,7 +262,7 @@ func parseScalar(data json.RawMessage, def float32) (scalarProperty, error) {
 		return scalarProperty{static: value}, nil
 	}
 	var frames []rawKeyframe
-	if err := json.Unmarshal(raw.K, &frames); err != nil {
+	if err := decodeKeyframes(raw.K, &frames); err != nil {
 		return scalarProperty{}, fmt.Errorf("animated scalar: %w", err)
 	}
 	if len(frames) == 0 {
@@ -268,7 +296,7 @@ func parsePoint(data json.RawMessage, def point) (pointProperty, error) {
 		return pointProperty{static: def}, nil
 	}
 	var raw rawProperty
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := decodeProperty(data, &raw); err != nil {
 		return pointProperty{}, fmt.Errorf("point property: %w", err)
 	}
 	if raw.Animated == 0 {
@@ -279,7 +307,7 @@ func parsePoint(data json.RawMessage, def point) (pointProperty, error) {
 		return pointProperty{static: value}, nil
 	}
 	var frames []rawKeyframe
-	if err := json.Unmarshal(raw.K, &frames); err != nil {
+	if err := decodeKeyframes(raw.K, &frames); err != nil {
 		return pointProperty{}, fmt.Errorf("animated point: %w", err)
 	}
 	keys := make([]pointKeyframe, len(frames))
@@ -310,7 +338,7 @@ func parseColor(data json.RawMessage, def color) (colorProperty, error) {
 		return colorProperty{static: def}, nil
 	}
 	var raw rawProperty
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := decodeProperty(data, &raw); err != nil {
 		return colorProperty{}, fmt.Errorf("color property: %w", err)
 	}
 	if raw.Animated == 0 {
@@ -321,7 +349,7 @@ func parseColor(data json.RawMessage, def color) (colorProperty, error) {
 		return colorProperty{static: value}, nil
 	}
 	var frames []rawKeyframe
-	if err := json.Unmarshal(raw.K, &frames); err != nil {
+	if err := decodeKeyframes(raw.K, &frames); err != nil {
 		return colorProperty{}, fmt.Errorf("animated color: %w", err)
 	}
 	keys := make([]colorKeyframe, len(frames))
@@ -352,7 +380,7 @@ func parsePath(data json.RawMessage) (pathProperty, error) {
 		return pathProperty{}, fmt.Errorf("missing path property")
 	}
 	var raw rawProperty
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := decodeProperty(data, &raw); err != nil {
 		return pathProperty{}, fmt.Errorf("path property: %w", err)
 	}
 	if raw.Animated == 0 {
@@ -363,7 +391,7 @@ func parsePath(data json.RawMessage) (pathProperty, error) {
 		return pathProperty{static: value}, nil
 	}
 	var frames []rawKeyframe
-	if err := json.Unmarshal(raw.K, &frames); err != nil {
+	if err := decodeKeyframes(raw.K, &frames); err != nil {
 		return pathProperty{}, fmt.Errorf("animated path: %w", err)
 	}
 	keys := make([]pathKeyframe, len(frames))
@@ -384,7 +412,7 @@ func parsePath(data json.RawMessage) (pathProperty, error) {
 				return pathProperty{}, fmt.Errorf("path keyframe %d next start: %w", i, err)
 			}
 		}
-		if len(start.Vertices) != len(end.Vertices) || len(start.In) != len(end.In) || len(start.Out) != len(end.Out) {
+		if start.Closed != end.Closed || len(start.Vertices) != len(end.Vertices) || len(start.In) != len(end.In) || len(start.Out) != len(end.Out) {
 			return pathProperty{}, fmt.Errorf("path keyframe %d changes vertex count", i)
 		}
 		keys[i] = pathKeyframe{t: frame.T, start: start, end: end, hold: frame.H == 1, ease: frameEase(frame)}
@@ -543,4 +571,65 @@ func pointsFromArrays(values [][]float32) ([]point, error) {
 		points[i] = point{X: value[0], Y: value[1]}
 	}
 	return points, nil
+}
+
+func decodeProperty(data json.RawMessage, dst *rawProperty) error {
+	if err := json.Unmarshal(data, dst); err != nil {
+		return err
+	}
+	if dst.Split || (len(dst.Expression) > 0 && !bytes.Equal(dst.Expression, []byte(`""`)) && !bytes.Equal(dst.Expression, []byte("null"))) {
+		return fmt.Errorf("unsupported expression or split position")
+	}
+	if dst.Animated != 0 && dst.Animated != 1 {
+		return fmt.Errorf("unsupported animation flag %d", dst.Animated)
+	}
+	return nil
+}
+func decodeKeyframes(data json.RawMessage, dst *[]rawKeyframe) error {
+	if err := json.Unmarshal(data, dst); err != nil {
+		return err
+	}
+	frames := *dst
+	if len(frames) == 0 {
+		return fmt.Errorf("animated property has no keyframes")
+	}
+	for i := range frames {
+		f := &frames[i]
+		if i > 0 && !(f.T > frames[i-1].T) {
+			return fmt.Errorf("keyframe times must increase")
+		}
+		for _, tangent := range []json.RawMessage{f.To, f.Ti} {
+			if len(tangent) == 0 {
+				continue
+			}
+			var values []float32
+			if err := json.Unmarshal(tangent, &values); err != nil {
+				return fmt.Errorf("invalid spatial tangents: %w", err)
+			}
+			for _, v := range values {
+				if v != 0 {
+					return fmt.Errorf("unsupported spatial tangents")
+				}
+			}
+		}
+		for _, b := range []rawBezier{f.I, f.O} {
+			for _, v := range [][]float32{b.X, b.Y} {
+				for j := 1; j < len(v); j++ {
+					if v[j] != v[0] {
+						return fmt.Errorf("unsupported component-specific easing")
+					}
+				}
+			}
+		}
+		if len(f.S) == 0 || bytes.Equal(f.S, []byte("null")) {
+			if i != len(frames)-1 || i == 0 {
+				return fmt.Errorf("keyframe missing start value")
+			}
+			f.S = frames[i-1].E
+			if len(f.S) == 0 {
+				f.S = frames[i-1].S
+			}
+		}
+	}
+	return nil
 }
