@@ -71,6 +71,10 @@ type rawAnimation struct {
 
 type rawLayer struct {
 	Ty     int               `json:"ty"`
+	Ip     *float32          `json:"ip"`
+	Op     *float32          `json:"op"`
+	St     float32           `json:"st"`
+	Hidden bool              `json:"hd"`
 	DDD    int               `json:"ddd"`
 	Name   string            `json:"nm"`
 	Ks     rawTransform      `json:"ks"`
@@ -86,10 +90,12 @@ type rawTransform struct {
 }
 
 type layer struct {
-	name      string
-	opacity   scalarProperty
-	transform transform
-	groups    []group
+	name                     string
+	inPoint, outPoint, start float32
+	hidden                   bool
+	opacity                  scalarProperty
+	transform                transform
+	groups                   []group
 }
 
 type transform struct {
@@ -153,15 +159,21 @@ func parseLayer(data json.RawMessage) (layer, error) {
 	if err != nil {
 		return layer{}, fmt.Errorf("layer opacity: %w", err)
 	}
-	l := layer{name: raw.Name, transform: tr, opacity: opacity}
-	for i, data := range raw.Shapes {
-		g, ok, err := parseGroupOrShape(data)
-		if err != nil {
-			return layer{}, fmt.Errorf("shape %d: %w", i, err)
-		}
-		if ok {
-			l.groups = append(l.groups, g)
-		}
+	l := layer{name: raw.Name, transform: tr, opacity: opacity, start: raw.St, hidden: raw.Hidden, inPoint: -math.MaxFloat32, outPoint: math.MaxFloat32}
+	if raw.Ip != nil {
+		l.inPoint = *raw.Ip
+	}
+	if raw.Op != nil {
+		l.outPoint = *raw.Op
+	}
+	root, err := parseGroup(raw.Shapes)
+	if err != nil {
+		return layer{}, err
+	}
+	if len(root.paths)+len(root.rects)+len(root.ellipses)+len(root.fills)+len(root.strokes) == 0 {
+		l.groups = root.groups
+	} else {
+		l.groups = []group{root}
 	}
 	return l, nil
 }
@@ -190,27 +202,8 @@ func parseTransform(raw rawTransform) (transform, error) {
 	return transform{anchor: anchor, position: position, scale: scale, rotation: rotation, opacity: opacity}, nil
 }
 
-func parseGroupOrShape(data json.RawMessage) (group, bool, error) {
-	var header struct {
-		Type string            `json:"ty"`
-		It   []json.RawMessage `json:"it"`
-	}
-	if err := json.Unmarshal(data, &header); err != nil {
-		return group{}, false, err
-	}
-	if header.Type == "gr" {
-		g, err := parseGroup(header.It)
-		return g, true, err
-	}
-	g := group{}
-	if err := addShape(&g, data, header.Type); err != nil {
-		return group{}, false, err
-	}
-	return g, true, nil
-}
-
 func parseGroup(items []json.RawMessage) (group, error) {
-	var g group
+	g := group{transform: defaultTransform()}
 	for i, data := range items {
 		var header struct {
 			Type string            `json:"ty"`

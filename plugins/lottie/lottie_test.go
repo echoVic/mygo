@@ -1,8 +1,11 @@
 package lottie
 
 import (
+	"image"
 	"strings"
 	"testing"
+
+	"github.com/egoist/mygo/ui"
 )
 
 const parserFixture = `{
@@ -99,6 +102,153 @@ func TestLoadRejectsUnsupportedFeatures(t *testing.T) {
 		_, err := Load([]byte(data))
 		if err == nil || !strings.Contains(err.Error(), "unsupported") {
 			t.Errorf("Load(%s) error = %v, want unsupported error", data, err)
+		}
+	}
+}
+
+func TestDrawRendersShapeLayers(t *testing.T) {
+	anim, err := Load([]byte(parserFixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	img := renderAt(anim, 0)
+	if got := countInk(img); got < 100 {
+		t.Fatalf("ink pixels = %d, want at least 100", got)
+	}
+	if got := countColor(img, 255, 0, 0); got == 0 {
+		t.Fatal("rendered fixture has no red fill pixels")
+	}
+	if got := countColor(img, 0, 0, 0); got == 0 {
+		t.Fatal("rendered fixture has no stroke pixels")
+	}
+}
+
+func TestDrawAppliesAnimatedLayerTransform(t *testing.T) {
+	anim, err := Load([]byte(parserFixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := renderAt(anim, 0)
+	end := renderAt(anim, 10)
+	if samePixels(start, end) {
+		t.Fatal("layer transform did not change the rendered frame")
+	}
+	startBox := inkBounds(start)
+	endBox := inkBounds(end)
+	if endBox.Min.X <= startBox.Min.X || endBox.Min.Y <= startBox.Min.Y {
+		t.Fatalf("animated transform bounds = %v -> %v, want a positive translation", startBox, endBox)
+	}
+}
+
+func renderAt(anim *Animation, frame float32) *image.RGBA {
+	return ui.Render(func(c *ui.Context) {
+		ui.Box(c).Size(float32(anim.Width), float32(anim.Height)).Background(ui.RGB(255, 255, 255)).Draw(func(p *ui.Painter, r ui.Rect) {
+			anim.drawAt(p, r, frame)
+		})
+	}, anim.Width, anim.Height, 1)
+}
+
+func countInk(img *image.RGBA) int {
+	count := 0
+	for y := img.Bounds().Min.Y; y < img.Bounds().Max.Y; y++ {
+		for x := img.Bounds().Min.X; x < img.Bounds().Max.X; x++ {
+			p := img.RGBAAt(x, y)
+			if p.R < 248 || p.G < 248 || p.B < 248 {
+				count++
+			}
+		}
+	}
+	return count
+}
+
+func countColor(img *image.RGBA, r, g, b uint8) int {
+	count := 0
+	for y := img.Bounds().Min.Y; y < img.Bounds().Max.Y; y++ {
+		for x := img.Bounds().Min.X; x < img.Bounds().Max.X; x++ {
+			p := img.RGBAAt(x, y)
+			if p.R == r && p.G == g && p.B == b {
+				count++
+			}
+		}
+	}
+	return count
+}
+
+func samePixels(a, b *image.RGBA) bool {
+	if !a.Rect.Eq(b.Rect) {
+		return false
+	}
+	for i := range a.Pix {
+		if a.Pix[i] != b.Pix[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func inkBounds(img *image.RGBA) image.Rectangle {
+	bounds := image.Rectangle{}
+	found := false
+	for y := img.Bounds().Min.Y; y < img.Bounds().Max.Y; y++ {
+		for x := img.Bounds().Min.X; x < img.Bounds().Max.X; x++ {
+			p := img.RGBAAt(x, y)
+			if p.R >= 248 && p.G >= 248 && p.B >= 248 {
+				continue
+			}
+			if !found {
+				bounds = image.Rect(x, y, x+1, y+1)
+				found = true
+			} else {
+				bounds = bounds.Union(image.Rect(x, y, x+1, y+1))
+			}
+		}
+	}
+	return bounds
+}
+
+const redRect = `{"ty":"rc","p":{"k":[50,40]},"s":{"k":[40,20]},"r":{"k":0}}, {"ty":"fl","c":{"k":[1,0,0,1]}}`
+
+func mustLoad(t *testing.T, layers string) *Animation {
+	t.Helper()
+	a, err := Load([]byte(`{"w":100,"h":80,"fr":10,"ip":0,"op":20,"layers":[` + layers + `]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
+}
+
+func TestDrawTopLevelShapesShareStyle(t *testing.T) {
+	a := mustLoad(t, `{"ty":4,"shapes":[`+redRect+`]}`)
+	if got := renderAt(a, 0).RGBAAt(50, 40); got.R != 255 || got.G != 0 || got.B != 0 {
+		t.Fatalf("center = %v, want red", got)
+	}
+}
+
+func TestDrawLayerStackAndVisibility(t *testing.T) {
+	red := `{"ty":4,"ip":2,"op":8,"shapes":[{"ty":"gr","it":[` + redRect + `]}]}`
+	blue := strings.ReplaceAll(red, `[1,0,0,1]`, `[0,0,1,1]`)
+	blue = strings.ReplaceAll(blue, `"ip":2,"op":8`, `"ip":0,"op":20`)
+	a := mustLoad(t, red+`,`+blue)
+	for _, tc := range []struct {
+		frame float32
+		red   bool
+	}{{0, false}, {2, true}, {7, true}, {8, false}} {
+		got := renderAt(a, tc.frame).RGBAAt(50, 40)
+		if tc.red && (got.R != 255 || got.B != 0) || !tc.red && (got.R != 0 || got.B != 255) {
+			t.Errorf("frame %v center = %v, want red=%v", tc.frame, got, tc.red)
+		}
+	}
+}
+
+func TestDrawRoundedRectangleIsSymmetric(t *testing.T) {
+	a := mustLoad(t, `{"ty":4,"shapes":[{"ty":"gr","it":[`+strings.ReplaceAll(redRect, `"k":0`, `"k":8`)+`]}]}`)
+	img := renderAt(a, 0)
+	for y := 30; y < 50; y++ {
+		for x := 30; x < 50; x++ {
+			left, right := img.RGBAAt(x, y), img.RGBAAt(99-x, y)
+			if diff := int(left.G) - int(right.G); diff < -3 || diff > 3 {
+				t.Fatalf("rectangle is asymmetric at (%d,%d): %v vs %v", x, y, left, right)
+			}
 		}
 	}
 }
