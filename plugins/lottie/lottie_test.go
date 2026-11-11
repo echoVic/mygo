@@ -67,8 +67,8 @@ func TestLoadCompositionAndProperties(t *testing.T) {
 	if got := anim.Duration(); got != 2_000_000_000 {
 		t.Fatalf("duration = %v, want 2s", got)
 	}
-	if len(anim.layers) != 1 || len(anim.layers[0].groups) != 1 {
-		t.Fatalf("layers/groups = %d/%d, want 1/1", len(anim.layers), len(anim.layers[0].groups))
+	if len(anim.layers) != 1 || len(anim.layers[0].items) != 1 || anim.layers[0].items[0].group == nil {
+		t.Fatalf("layers = %d, want 1, its shapes in a group", len(anim.layers))
 	}
 	layer := anim.layers[0]
 	if got := layer.transform.position.sample(5); got != (point{X: 20, Y: 30}) {
@@ -79,26 +79,26 @@ func TestLoadCompositionAndProperties(t *testing.T) {
 	}
 	// The layer's shapes are a group of their own, which keeps a top-level
 	// transform around their nested groups.
-	group := layer.groups[0].groups[0]
+	group := layer.items[0].group.items[0].group
 	kinds := map[string]int{}
-	for _, s := range group.geometry {
+	for _, s := range layer.geometry {
 		kinds[fmt.Sprintf("%T", s)]++
 	}
-	if len(group.geometry) != 3 || kinds["lottie.pathShape"] != 1 || kinds["lottie.rectShape"] != 1 || kinds["lottie.ellipseShape"] != 1 {
-		t.Fatalf("group geometry = %v; want a path, a rectangle and an ellipse", kinds)
+	if len(layer.geometry) != 3 || kinds["lottie.pathShape"] != 1 || kinds["lottie.rectShape"] != 1 || kinds["lottie.ellipseShape"] != 1 {
+		t.Fatalf("geometry = %v; want a path, a rectangle and an ellipse", kinds)
 	}
-	if len(group.styles) != 2 {
-		t.Fatalf("group styles = %d; want a fill and a stroke", len(group.styles))
+	if len(group.items) != 5 || group.items[3].style == nil || group.items[4].style == nil {
+		t.Fatalf("group items = %+v; want the geometry, a fill and a stroke", group.items)
 	}
-	fill, ok := group.styles[0].(*fill)
+	fill, ok := group.items[3].style.(*fill)
 	if !ok {
-		t.Fatalf("first style = %T, want the fill", group.styles[0])
+		t.Fatalf("first style = %T, want the fill", group.items[3].style)
 	}
 	if got := fill.color.sample(5); got != (color{R: 0.5, G: 0, B: 0.5, A: 1}) {
 		t.Fatalf("fill color at frame 5 = %+v, want purple", got)
 	}
-	if s, ok := group.styles[1].(*stroke); !ok || s.miter != 4 || s.cap != ui.ButtCap || s.join != ui.MiterJoin {
-		t.Fatalf("second style = %+v, want a stroke with Lottie's defaults: butt caps, miter joins, limit 4", group.styles[1])
+	if s, ok := group.items[4].style.(*stroke); !ok || s.miter != 4 || s.cap != ui.ButtCap || s.join != ui.MiterJoin {
+		t.Fatalf("second style = %+v, want a stroke with Lottie's defaults: butt caps, miter joins, limit 4", group.items[4].style)
 	}
 }
 
@@ -111,7 +111,7 @@ func TestLoadRejectsMalformedJSON(t *testing.T) {
 func TestLoadRejectsUnsupportedFeatures(t *testing.T) {
 	cases := []string{
 		`{"w":10,"h":10,"fr":10,"ip":0,"op":1,"layers":[{"ty":5}]}`,
-		`{"w":10,"h":10,"fr":10,"ip":0,"op":1,"layers":[{"ty":4,"shapes":[{"ty":"gr","it":[{"ty":"tm"}]}]}]}`,
+		`{"w":10,"h":10,"fr":10,"ip":0,"op":1,"layers":[{"ty":4,"shapes":[{"ty":"gr","it":[{"ty":"rp"}]}]}]}`,
 	}
 	for _, data := range cases {
 		_, err := Load([]byte(data))
@@ -121,10 +121,10 @@ func TestLoadRejectsUnsupportedFeatures(t *testing.T) {
 	}
 	// The errors name what they reject, in words.
 	for want, layer := range map[string]string{
-		"unsupported image layer (ty 2)":   `{"ty":2}`,
-		"unsupported layer type 42":        `{"ty":42}`,
-		`unsupported trim paths (ty "tm")`: `{"ty":4,"shapes":[{"ty":"tm"}]}`,
-		`unsupported shape type "xx"`:      `{"ty":4,"shapes":[{"ty":"xx"}]}`,
+		"unsupported image layer (ty 2)": `{"ty":2}`,
+		"unsupported layer type 42":      `{"ty":42}`,
+		`unsupported repeater (ty "rp")`: `{"ty":4,"shapes":[{"ty":"rp"}]}`,
+		`unsupported shape type "xx"`:    `{"ty":4,"shapes":[{"ty":"xx"}]}`,
 	} {
 		_, err := Load([]byte(`{"w":10,"h":10,"fr":10,"ip":0,"op":1,"layers":[` + layer + `]}`))
 		if err == nil || !strings.Contains(err.Error(), want) {
@@ -450,25 +450,31 @@ func TestGroupNestingDepth(t *testing.T) {
 	}
 }
 
-// Load makes the outlines of a group whose geometry is static once, and
-// every frame draws those; only animated geometry is sampled again.
+// Load makes the outlines of static geometry once, and every frame draws
+// those; only animated geometry is sampled again.
 func TestStaticGeometryIsRetained(t *testing.T) {
 	growing := `{"ty":"rc","p":{"k":[50,40]},"s":{"a":1,"k":[{"t":0,"s":[10,10],"e":[40,20]},{"t":10,"s":[40,20]}]}},{"ty":"fl","c":{"k":[0,0,1]}}`
-	a := mustLoad(t, `{"ty":4,"shapes":[{"ty":"gr","it":[`+redRect+`]},{"ty":"gr","it":[`+growing+`]}]}`)
-	shapes := &a.layers[0].groups[0]
-	static, animated := &shapes.groups[0], &shapes.groups[1]
-	if len(static.outlines) != 1 || static.animated {
-		t.Fatalf("static group: %d retained outlines, animated %v; want 1, false", len(static.outlines), static.animated)
+	a := mustLoad(t, `{"ty":4,"shapes":[{"ty":"gr","it":[`+redRect+`]}]}`)
+	sh := &a.layers[0].shapes
+	if len(sh.outlines) != 1 || len(sh.outlines[0].paths) != 1 || sh.animated {
+		t.Fatalf("static shapes: retained %v, animated %v; want one outline, false", sh.outlines, sh.animated)
 	}
 	for _, frame := range []float32{0, 7, 19} {
-		if got := static.outlinesAt(frame); len(got) != 1 || &got[0] != &static.outlines[0] {
-			t.Fatalf("frame %v: static group's outlines were made again", frame)
+		if got := sh.outlinesAt(frame); len(got) != 1 || &got[0] != &sh.outlines[0] {
+			t.Fatalf("frame %v: static outlines were made again", frame)
 		}
 	}
-	if animated.outlines != nil || !animated.animated {
-		t.Fatal("animated group retained its outlines")
+	a = mustLoad(t, `{"ty":4,"shapes":[{"ty":"gr","it":[`+redRect+`]},{"ty":"gr","it":[`+growing+`]}]}`)
+	sh = &a.layers[0].shapes
+	if !sh.animated || len(sh.moving) != 1 || sh.moving[0] != 1 || sh.outlines[1].paths != nil {
+		t.Fatalf("animated rectangle: moving %v, retained %v; want it sampled every frame", sh.moving, sh.outlines[1])
 	}
-	if a, b := animated.outlinesAt(0)[0].Vertices[0], animated.outlinesAt(10)[0].Vertices[0]; a == b {
+	for _, frame := range []float32{0, 7} {
+		if got := sh.outlinesAt(frame); &got[0].paths[0].Vertices[0] != &sh.outlines[0].paths[0].Vertices[0] {
+			t.Fatalf("frame %v: the static rectangle's outline was made again", frame)
+		}
+	}
+	if a, b := sh.outlinesAt(0)[1].paths[0].Vertices[0], sh.outlinesAt(10)[1].paths[0].Vertices[0]; a == b {
 		t.Fatalf("animated rectangle did not change: %v at both frames", a)
 	}
 }

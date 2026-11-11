@@ -28,7 +28,7 @@ type composition struct {
 // solid's rectangle, from its in point until its out point, in the
 // composition's frames.
 type layer struct {
-	group
+	shapes
 	// parent is the index in the composition of the layer whose
 	// transform this one's is inside, -1 for none.
 	parent            int
@@ -268,13 +268,14 @@ func parseLayer(data json.RawMessage, h *rawHeader) (layer, error) {
 		l.outPoint = float32(*raw.Out)
 	}
 	if *ty == solidLayer {
-		return l, raw.parseSolid(&l.group)
+		err = raw.parseSolid(&l.shapes)
+	} else {
+		err = parseLayerShapes(raw.Shapes, &l.shapes)
 	}
-	shapes, err := parseGroup(raw.Shapes, 0)
 	if err != nil {
 		return layer{}, err
 	}
-	l.groups = []group{shapes}
+	l.retain()
 	return l, nil
 }
 
@@ -297,14 +298,14 @@ func (raw *rawPlacement) parse() (layer, error) {
 	if err != nil {
 		return layer{}, err
 	}
-	return layer{group: group{transform: tr}, parent: root, inPoint: -math.MaxFloat32, outPoint: math.MaxFloat32}, nil
+	return layer{shapes: shapes{group: group{transform: tr}}, parent: root, inPoint: -math.MaxFloat32, outPoint: math.MaxFloat32}, nil
 }
 
-// parseSolid makes g a solid layer's rectangle, from (0,0) to its size
+// parseSolid makes sh a solid layer's rectangle, from (0,0) to its size
 // (sw, sh), filled with its color (sc), which is drawn, as lottie-web
 // draws it, with its layer's transform and opacity. A solid of no size
 // draws nothing.
-func (raw *rawLayer) parseSolid(g *group) error {
+func (raw *rawLayer) parseSolid(sh *shapes) error {
 	if raw.SolidWidth == nil || raw.SolidHeight == nil || *raw.SolidWidth < 0 || *raw.SolidHeight < 0 {
 		return fmt.Errorf("solid size (sw, sh) must be given, and not negative")
 	}
@@ -314,13 +315,12 @@ func (raw *rawLayer) parseSolid(g *group) error {
 	}
 	w, h := float32(*raw.SolidWidth), float32(*raw.SolidHeight)
 	if w > 0 && h > 0 {
-		g.geometry = []geometry{rectShape{
+		sh.geometry = []geometry{rectShape{
 			position: property[point]{static: point{w / 2, h / 2}},
 			size:     property[point]{static: point{w, h}},
 		}}
-		g.styles = []style{&fill{rule: ui.NonZero, color: property[color]{static: c}, opacity: property[float32]{static: 100}}}
+		sh.items = []item{{geometry: 0}, {style: &fill{rule: ui.NonZero, color: property[color]{static: c}, opacity: property[float32]{static: 100}}}}
 	}
-	g.retain()
 	return nil
 }
 

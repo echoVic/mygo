@@ -24,6 +24,17 @@ const maxGroupDepth = 32
 // links, which bounds the work of Draw for each layer.
 const maxParentDepth = 32
 
+// maxTrims is how many trims may cut one shape, one after the other,
+// and maxStyles how many styles may paint one shape or group: a style
+// paints all that is before it in its group, and without a bound, n
+// shapes followed by n fills would paint n² every frame. Lottie files
+// have few: of lottie-ios's 189 samples, at most 2 trims cut a shape,
+// and 5 styles paint one.
+const (
+	maxTrims  = 8
+	maxStyles = 16
+)
+
 // num is a number of the JSON. Every number Load reads is one, so that the
 // bound is checked in this one place.
 type num float32
@@ -170,7 +181,7 @@ func (l *rawPlacement) unsupported() error {
 var (
 	layerTypes = [...]string{0: "precomposition", 2: "image", 5: "text", 6: "audio", 13: "camera"}
 	shapeTypes = map[string]string{
-		"gf": "gradient fill", "gs": "gradient stroke", "tm": "trim paths", "rp": "repeater",
+		"gf": "gradient fill", "gs": "gradient stroke", "rp": "repeater",
 		"mm": "merge paths", "rd": "rounded corners", "sr": "polystar", "pb": "pucker and bloat",
 		"tw": "twist", "op": "offset path", "zz": "zig zag", "no": "no style",
 	}

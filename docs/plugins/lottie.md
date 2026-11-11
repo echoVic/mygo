@@ -88,8 +88,9 @@ are outside the subset, with a layer/group/property context.
 | Layers | 2D shape layers (`ty: 4`), solid layers (`ty: 1`) and null layers (`ty: 3`). A layer shows from its in point up to its out point, not at it, as in lottie-web (lottie-ios also shows it at its out point). Null layers and hidden layers (`hd: true`) draw nothing; they matter only as parents. A layer's start time (`st`) is accepted and changes nothing: these layers' keyframes and in and out points are in composition frames. |
 | Solid layers | A rectangle from (0, 0) to the solid's size (`sw`, `sh`), filled with its color (`sc`: `#rrggbb`, as exporters write it, or `#rgb`), under the layer's transform and opacity. The size must be given and not negative; a solid of no size draws nothing. Other CSS colors, and hex colors with an alpha, are rejected. |
 | Parenting | A layer whose `parent` is another layer's `ind` moves with it: its transform is inside its parent's, inside its parent's parent's, and so on, all sampled at the same frame. Only the layer's own in and out points, visibility and opacity decide whether and how it shows; its parents' don't, as in After Effects and lottie-web. Parents don't change the drawing order, which stays the order of the layers. |
-| Geometry | Cubic Bezier paths, rounded rectangles, ellipses; compound paths with nonzero or even-odd fill. Rectangles/ellipses use default direction (`d: 1` or omitted); a negative size draws as its magnitude, and roundness is at most half the shorter side. |
-| Styles | One solid fill and one solid stroke per group, with opacity, width, cap, join and miter limit (4 when `ml` is missing). Styles follow their geometry; independently styled child groups may be nested, at most 32 deep. Hidden items are skipped, whatever they are. |
+| Geometry | Cubic Bezier paths, rounded rectangles, ellipses; compound paths with nonzero or even-odd fill. A path runs in the order of its vertices. A rectangle or an ellipse runs clockwise (`d: 1` or `d: 2`) or the other way (`d: 3`); without `d` it runs clockwise, as in lottie-ios (lottie-web runs such a rectangle the other way). A rectangle starts at its top right corner, below the corner's curve, and goes down its right side, and an ellipse starts at its top, as in lottie-web and lottie-ios, which decides where a trim starts. A negative width or height mirrors the shape, so that it runs the other way; a rectangle's roundness is at most half its shorter side. |
+| Styles | Solid fills and strokes, with opacity, width, cap, join and miter limit (4 when `ml` is missing). A style paints all the geometry listed before it in its group, that of nested groups too, under their transforms, as in lottie-web: geometry and styles may come in any order, and several styles may paint the same geometry, at most 16 the same shape or group. The item listed first is on top, styles and nested groups alike. A stroke's width is in its own group's coordinates: the transforms of nested groups move only their geometry's points, and their opacity applies only to their own styles. Groups nest at most 32 deep. Hidden items are skipped, whatever they are, as in lottie-ios (lottie-web still applies a hidden trim). |
+| Trim paths | A trim (`tm`), with its start `s`, end `e` and offset `o`, static or keyframed, cuts the geometry listed before it in its group, that of nested groups too, as lottie-web's trim modifier does. Every style that paints that geometry paints what is left, a style listed before the trim too; a fill fills each piece as if it were closed. Start and end are percentages of the length, clamped to 0 to 100; the offset is in degrees, 360 the whole length, and a cut it carries past the end wraps around to the start, in one piece across the start of a closed path. A start after the end cuts as if they were swapped, a start equal to the end leaves nothing, and 0 to 100 without an offset leaves the geometry as it was, closed paths closed. Simultaneously (`m: 1`), each shape is cut on its own, its subpaths end to end; individually (`m: 2`), the shapes are laid end to end, in the order they are listed, and cut as one. Several trims cut one after the other, in the order they are listed, at most 8 the same shape. Lengths are measured along the curves, in each shape's own coordinates, before any group's transform, as in lottie-web. A trim whose values are static and whose geometry doesn't change is cut once, by `Load`; the others every frame. |
 | Transform | Anchor, position, scale, rotation and opacity on layers and nested groups. A position split into `x` and `y` (`p.s: true`) animates each on its own; its `z`, like a third component of any 2D value, is ignored. Static zero skew fields are accepted. |
 | Properties | Static and keyframed scalar, 2D point, color and path values; hold, linear and cubic temporal Bezier easing, including back and overshoot easing (`y` controls outside 0 to 1; `x` controls are clamped to 0 to 1). Path morphs preserve vertex count and closed/open state. Whether a property is keyframed is decided by its value, as in lottie-web: `k` is keyframes when it is a list of objects. Its `a` flag, which exporters don't always set to match, is ignored. |
 | Easing per component | Controls written as arrays (`"o": {"x": [0.2, 0.6], "y": [0, 0]}`) ease each component on its own curve: a point's `x` and `y`, a color's channels. Component n uses entry n of each control, or entry 0 where a control has fewer, as lottie-web does; entries beyond the value's components are ignored, such as the third of a scale exported as `[100, 100, 100]`. A scalar uses the first entry. A path has a single curve: the entries of its keyframes' controls must agree. |
@@ -99,17 +100,19 @@ Every number that `Load` reads as a value must be within ±10,000,000
 (1e7): the composition's size, frame rate and in and out points, layers'
 in and out points, `ind` and `parent`, solids' sizes, and every
 coordinate, size, scale, angle, color, opacity, width, miter limit,
-keyframe time and easing control. `Load` rejects a composition with a
-number beyond that. Easing that overshoots can still carry a value past
-it, or a chain of large scales overflow; `Draw` skips what it then cannot
-draw rather than fail. Overshooting values stay valid: opacity and color
-channels are clamped to their ranges, and a stroke whose width falls to
-zero or below is not drawn.
+trim's start, end and offset, keyframe time and easing control. `Load`
+rejects a composition with a number beyond that. Easing that overshoots
+can still carry a value past it, or a chain of large scales overflow;
+`Draw` skips what it then cannot draw rather than fail. Overshooting
+values stay valid: opacity and color channels are clamped to their
+ranges, a trim's start and end to 0 to 100, and a stroke whose width
+falls to zero or below is not drawn.
 
 Numbers that `Load` reads as whole ones (a layer's type `ty`, `ind`,
 `parent` and `ddd`, a keyframe's hold `h`, a stroke's cap and join, a
-fill rule, a shape's direction) may be written as floats, as some
-exporters write every number: `4.0` reads as 4, and `4.5` is an error.
+fill rule, a shape's direction, a trim's mode) may be written as floats,
+as some exporters write every number: `4.0` reads as 4, and `4.5` is an
+error.
 
 `Load` resolves parent links once. A `parent` that no layer's `ind` is,
 or that several layers' `ind` is, links that form a cycle, and a chain of
@@ -122,20 +125,18 @@ draws itself, and is ignored. Every layer's `ind` is read, to resolve
 links; null and hidden layers that place no layer that draws are
 otherwise skipped, whatever they contain.
 
-Geometry shares its group's fill/stroke. Groups containing child groups
-must give each child its own styles; inherited parent styles, interleaved
-geometry/styles, multiple fills/strokes, and multiple transforms per group
-are rejected. Spatial tangents on values other than 2D points (a
-rotation, a color) are rejected, and so is easing per component on a
-keyframe that moves along spatial tangents, which has a single curve, as
-in lottie-web. Colors interpolate channel by channel in the JSON color
-space.
+A group may have one transform (`tr`); several are rejected. Spatial
+tangents on values other than 2D points (a rotation, a color) are
+rejected, and so is easing per component on a keyframe that moves along
+spatial tangents, which has a single curve, as in lottie-web. Colors
+interpolate channel by channel in the JSON color space.
 
 Unsupported features include precompositions, images, text, masks,
 mattes, blend modes, effects, expressions, 3D, auto-orient, time
-remapping/stretch, gradients, trim paths, repeaters and other shape
-operators. Reverse shape direction (`d: 3`) is rejected. Export paths
-with the intended vertex winding, or use even-odd compound fills.
+remapping/stretch, gradients, repeaters and other shape operators. A
+path (`sh`) with reverse direction (`d: 3`) is rejected: export paths
+with the intended vertex order and winding, or use even-odd compound
+fills.
 
 A stroke scales with its transforms, unevenly where they scale unevenly,
 as in After Effects.
