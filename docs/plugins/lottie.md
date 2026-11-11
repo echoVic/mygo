@@ -9,7 +9,10 @@ or registration with `mygo.Use`.
 
 Load once, keep one player per view, and draw it in an element's paint
 callback. The player starts automatically. Bounds use DIPs; the
-composition fits inside them with its aspect ratio preserved and is centered.
+composition fits inside them with its aspect ratio preserved and is
+centered, and nothing it draws shows outside its own rectangle, as in
+other Lottie players. Paths are rasterized at the size they are drawn, so
+a small composition drawn large stays sharp.
 
 ```go
 import (
@@ -81,12 +84,22 @@ are outside the subset, with a layer/group/property context.
 
 | Area | Supported |
 | --- | --- |
-| Composition | Positive dimensions/frame rate, in/out points; layer visibility, start time and hidden flags. |
-| Layers | 2D shape layers (`ty: 4`). |
-| Geometry | Cubic Bezier paths, rounded rectangles, ellipses; compound paths with nonzero or even-odd fill. Rectangles/ellipses use default direction (`d: 1` or omitted). |
-| Styles | One solid fill and one solid stroke per group, with opacity, width, cap, join and miter limit. Styles follow their geometry; independently styled child groups may be nested. |
+| Composition | Width and height that are positive whole numbers (`100` or `100.0`; `100.5` is rejected), a positive frame rate, in and out points. |
+| Layers | 2D shape layers (`ty: 4`), with in and out points. Hidden layers (`hd: true`) are skipped, whatever they contain. A layer's start time (`st`) is accepted and changes nothing: a shape layer's keyframes and in and out points are in composition frames. |
+| Geometry | Cubic Bezier paths, rounded rectangles, ellipses; compound paths with nonzero or even-odd fill. Rectangles/ellipses use default direction (`d: 1` or omitted); a negative size draws as its magnitude, and roundness is at most half the shorter side. |
+| Styles | One solid fill and one solid stroke per group, with opacity, width, cap, join and miter limit (4 when `ml` is missing). Styles follow their geometry; independently styled child groups may be nested, at most 32 deep. Hidden items are skipped, whatever they are. |
 | Transform | Anchor, position, scale, rotation and opacity on layers and nested groups. Static zero skew fields are accepted. |
-| Properties | Static and keyframed scalar, 2D point, color and path values; hold, linear and cubic temporal Bezier easing. Path morphs preserve vertex count and closed/open state. |
+| Properties | Static and keyframed scalar, 2D point, color and path values; hold, linear and cubic temporal Bezier easing, including back and overshoot easing (`y` controls outside 0 to 1; `x` controls are clamped to 0 to 1). Path morphs preserve vertex count and closed/open state. |
+
+Every number that `Load` reads as a value must be within ±10,000,000
+(1e7): the composition's size, frame rate and in and out points, layers'
+in and out points, and every coordinate, size, scale, angle, color,
+opacity, width, miter limit, keyframe time and easing control. `Load`
+rejects a composition with a number beyond that. Easing that overshoots can still carry a value past
+it, or a chain of large scales overflow; `Draw` skips what it then cannot
+draw rather than fail. Overshooting values stay valid: opacity and color
+channels are clamped to their ranges, and a stroke whose width falls to
+zero or below is not drawn.
 
 Geometry shares its group's fill/stroke. Groups containing child groups
 must give each child its own styles; inherited parent styles, interleaved
@@ -100,6 +113,9 @@ layers, masks, mattes, blend modes, effects, expressions, 3D, parenting,
 time remapping/stretch, gradients, trim paths, repeaters and other shape
 operators. Reverse shape direction (`d: 3`) is rejected. Export paths
 with the intended vertex winding, or use even-odd compound fills.
+
+A stroke scales with its transforms, unevenly where they scale unevenly,
+as in After Effects.
 
 Opacity multiplies each primitive's alpha. Overlapping children or a
 fill and stroke in a translucent group can therefore look different from

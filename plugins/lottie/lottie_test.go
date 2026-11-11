@@ -1,6 +1,8 @@
 package lottie
 
 import (
+	"encoding/json"
+	"fmt"
 	"image"
 	"strings"
 	"testing"
@@ -62,7 +64,7 @@ func TestLoadCompositionAndProperties(t *testing.T) {
 	if anim.Width != 100 || anim.Height != 80 || anim.FrameRate != 10 {
 		t.Fatalf("metadata = %dx%d @ %v, want 100x80 @ 10", anim.Width, anim.Height, anim.FrameRate)
 	}
-	if got := anim.duration(); got != 2_000_000_000 {
+	if got := anim.Duration(); got != 2_000_000_000 {
 		t.Fatalf("duration = %v, want 2s", got)
 	}
 	if len(anim.layers) != 1 || len(anim.layers[0].groups) != 1 {
@@ -72,19 +74,31 @@ func TestLoadCompositionAndProperties(t *testing.T) {
 	if got := layer.transform.position.sample(5); got != (point{X: 20, Y: 30}) {
 		t.Fatalf("position at frame 5 = %+v, want (20,30)", got)
 	}
-	if got := layer.opacity.sample(5); got != 75 {
+	if got := layer.transform.opacity.sample(5); got != 75 {
 		t.Fatalf("opacity at frame 5 = %v, want 75", got)
 	}
-	// The synthetic root preserves transforms around nested shape groups.
+	// The layer's shapes are a group of their own, which keeps a top-level
+	// transform around their nested groups.
 	group := layer.groups[0].groups[0]
-	if len(group.paths) != 1 || len(group.rects) != 1 || len(group.ellipses) != 1 {
-		t.Fatalf("group geometry = paths %d, rects %d, ellipses %d; want 1 each", len(group.paths), len(group.rects), len(group.ellipses))
+	kinds := map[string]int{}
+	for _, s := range group.geometry {
+		kinds[fmt.Sprintf("%T", s)]++
 	}
-	if len(group.fills) != 1 || len(group.strokes) != 1 {
-		t.Fatalf("group styles = fills %d, strokes %d; want 1 each", len(group.fills), len(group.strokes))
+	if len(group.geometry) != 3 || kinds["lottie.pathShape"] != 1 || kinds["lottie.rectShape"] != 1 || kinds["lottie.ellipseShape"] != 1 {
+		t.Fatalf("group geometry = %v; want a path, a rectangle and an ellipse", kinds)
 	}
-	if got := group.fills[0].color.sample(5); got != (color{R: 0.5, G: 0, B: 0.5, A: 1}) {
+	if len(group.styles) != 2 {
+		t.Fatalf("group styles = %d; want a fill and a stroke", len(group.styles))
+	}
+	fill, ok := group.styles[0].(*fill)
+	if !ok {
+		t.Fatalf("first style = %T, want the fill", group.styles[0])
+	}
+	if got := fill.color.sample(5); got != (color{R: 0.5, G: 0, B: 0.5, A: 1}) {
 		t.Fatalf("fill color at frame 5 = %+v, want purple", got)
+	}
+	if s, ok := group.styles[1].(*stroke); !ok || s.miter != 4 || s.cap != ui.ButtCap || s.join != ui.MiterJoin {
+		t.Fatalf("second style = %+v, want a stroke with Lottie's defaults: butt caps, miter joins, limit 4", group.styles[1])
 	}
 }
 
@@ -254,9 +268,211 @@ func TestDrawRoundedRectangleIsSymmetric(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsNonMonotonicTemporalEasing(t *testing.T) {
+// Back and overshoot easings move outside the keyframes' values, and a
+// curve's y controls need not be in order: Lottie allows both.
+func TestLoadAcceptsOvershootEasing(t *testing.T) {
+	for _, ease := range []string{
+		`"o":{"x":0.42,"y":2},"i":{"x":0.58,"y":-1}`,
+		`"o":{"x":0.1,"y":0.9},"i":{"x":0.9,"y":0.1}`,
+		`"o":{"x":0.34,"y":1.56},"i":{"x":0.64,"y":1}`,
+		`"o":{"x":-1,"y":-0.5},"i":{"x":3,"y":1.5}`,
+	} {
+		p, err := parseScalar(json.RawMessage(`{"a":1,"k":[{"t":0,"s":[0],"e":[100],`+ease+`},{"t":10,"s":[100]}]}`), 0)
+		if err != nil {
+			t.Fatalf("%s: %v", ease, err)
+		}
+		if p.sample(0) != 0 || p.sample(10) != 100 {
+			t.Errorf("%s: ends = %v, %v, want 0, 100", ease, p.sample(0), p.sample(10))
+		}
+	}
+	back, err := parseScalar(json.RawMessage(`{"a":1,"k":[{"t":0,"s":[0],"e":[100],"o":{"x":0.34,"y":1.56},"i":{"x":0.64,"y":1}},{"t":10,"s":[100]}]}`), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peak := float32(0)
+	for f := float32(0); f <= 10; f += 0.25 {
+		peak = max(peak, back.sample(f))
+	}
+	if peak <= 100 {
+		t.Fatalf("back easing peaks at %v, want past 100", peak)
+	}
 	data := `{"w":10,"h":10,"fr":10,"ip":0,"op":2,"layers":[{"ty":4,"ks":{"p":{"a":1,"k":[{"t":0,"s":[0,0],"e":[10,0],"i":{"x":0.58,"y":-1},"o":{"x":0.42,"y":2}},{"t":2,"s":[10,0]}]}}}]}`
-	if _, err := Load([]byte(data)); err == nil || !strings.Contains(err.Error(), "temporal easing") {
-		t.Fatalf("Load error = %v, want temporal easing rejection", err)
+	if _, err := Load([]byte(data)); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+}
+
+// renderBox draws anim at frame into a w×h box on white.
+func renderBox(anim *Animation, w, h int, frame float32) *image.RGBA {
+	return ui.Render(func(c *ui.Context) {
+		ui.Box(c).Size(float32(w), float32(h)).Background(ui.RGB(255, 255, 255)).Draw(func(p *ui.Painter, r ui.Rect) {
+			anim.drawAt(p, r, frame)
+		})
+	}, w, h, 1)
+}
+
+// edgePixels counts the pixels that are neither the white background nor
+// a channel's full ink: the antialiased edges of what is drawn.
+func edgePixels(img *image.RGBA) int {
+	n := 0
+	for y := img.Bounds().Min.Y; y < img.Bounds().Max.Y; y++ {
+		for x := img.Bounds().Min.X; x < img.Bounds().Max.X; x++ {
+			if g := img.RGBAAt(x, y).G; g > 8 && g < 247 {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// A shape layer's keyframes are in composition frames: its start time
+// moves nothing but precomps, which the subset rejects.
+func TestLayerStartTimeKeepsCompositionFrames(t *testing.T) {
+	a := mustLoad(t, `{"ty":4,"st":10,"ks":{"p":{"a":1,"k":[{"t":0,"s":[0,0],"e":[40,0]},{"t":10,"s":[40,0]}]}},"shapes":[{"ty":"rc","p":{"k":[20,40]},"s":{"k":[20,20]}},{"ty":"fl","c":{"k":[1,0,0,1]}}]}`)
+	for _, tc := range []struct {
+		frame float32
+		x     int
+	}{{0, 10}, {5, 30}, {10, 50}} {
+		if got := inkBounds(renderAt(a, tc.frame)).Min.X; got != tc.x {
+			t.Errorf("frame %v: x = %d, want %d", tc.frame, got, tc.x)
+		}
+	}
+}
+
+// What a composition draws outside its own rectangle does not show.
+func TestDrawClipsToComposition(t *testing.T) {
+	// A 100×80 composition in a 300×80 box sits at x 100 to 200; its
+	// rectangle at x 130 to 170 of the composition would reach 230 to 270.
+	a := mustLoad(t, `{"ty":4,"shapes":[{"ty":"rc","p":{"k":[150,40]},"s":{"k":[40,20]}},{"ty":"rc","p":{"k":[50,40]},"s":{"k":[20,20]}},{"ty":"fl","c":{"k":[1,0,0,1]}}]}`)
+	img := renderBox(a, 300, 80, 0)
+	if got := inkBounds(img); got != image.Rect(140, 30, 160, 50) {
+		t.Fatalf("ink = %v, want only the rectangle inside the composition, (140,30)-(160,50)", got)
+	}
+}
+
+// A small composition drawn large is as sharp as the same shape drawn at
+// that size: its edges are no wider than the painter's own.
+func TestDrawStaysSharpWhenScaledUp(t *testing.T) {
+	const circle = `{"ty":"el","p":{"k":[5,5]},"s":{"k":[8,8]}}`
+	direct := func(draw func(p *ui.Painter, path *ui.Path)) int {
+		return edgePixels(ui.Render(func(c *ui.Context) {
+			ui.Box(c).Size(200, 200).Background(ui.RGB(255, 255, 255)).Draw(func(p *ui.Painter, r ui.Rect) {
+				var path ui.Path
+				draw(p, &path)
+			})
+		}, 200, 200, 1))
+	}
+	load := func(shapes string) *Animation {
+		a, err := Load([]byte(`{"w":10,"h":10,"fr":10,"ip":0,"op":20,"layers":[{"ty":4,"shapes":[` + shapes + `]}]}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a
+	}
+	fill := direct(func(p *ui.Painter, path *ui.Path) { p.FillPath(path.Circle(100, 100, 80), ui.RGB(255, 0, 0)) })
+	if got := edgePixels(renderBox(load(circle+`,{"ty":"fl","c":{"k":[1,0,0,1]}}`), 200, 200, 0)); got > fill*3/2 {
+		t.Errorf("filled circle 20× its size: %d edge pixels, want about %d", got, fill)
+	}
+	stroke := direct(func(p *ui.Painter, path *ui.Path) { p.StrokePath(path.Circle(100, 100, 80), 20, ui.RGB(255, 0, 0)) })
+	if got := edgePixels(renderBox(load(circle+`,{"ty":"st","c":{"k":[1,0,0,1]},"w":{"k":1}}`), 200, 200, 0)); got > stroke*3/2 {
+		t.Errorf("stroked circle 20× its size: %d edge pixels, want about %d", got, stroke)
+	}
+	// Scaled unevenly, a stroke is drawn at the larger scale and only
+	// shrunk along the other axis.
+	uneven := load(`{"ty":"gr","it":[` + circle + `,{"ty":"st","c":{"k":[1,0,0,1]},"w":{"k":1}},{"ty":"tr","a":{"k":[5,5]},"p":{"k":[5,5]},"s":{"k":[100,50]}}]}`)
+	if got := edgePixels(renderBox(uneven, 200, 200, 0)); got > stroke*3/2 {
+		t.Errorf("stroked ellipse 20× its size: %d edge pixels, want about %d", got, stroke)
+	}
+}
+
+// A miter join without a miter limit (ml) gets Lottie's default of 4,
+// not a bevel.
+func TestStrokeMiterLimitDefaultsToFour(t *testing.T) {
+	triangle := func(ml string) *image.RGBA {
+		return renderAt(mustLoad(t, `{"ty":4,"shapes":[{"ty":"sh","ks":{"k":{"i":[[0,0],[0,0],[0,0]],"o":[[0,0],[0,0],[0,0]],"v":[[20,70],[50,10],[80,70]],"c":true}}},{"ty":"st","lj":1,`+ml+`"c":{"k":[0,0,0,1]},"w":{"k":6}}]}`), 0)
+	}
+	absent, four, one := triangle(``), triangle(`"ml":4,`), triangle(`"ml":1,`)
+	if !samePixels(absent, four) {
+		t.Error("a stroke without ml draws differently from ml 4")
+	}
+	if samePixels(absent, one) {
+		t.Error("a stroke without ml draws bevelled, as ml 1")
+	}
+}
+
+// Width and height written as whole floats (100.0) load as whole numbers.
+func TestLoadCompositionSizeAsWholeFloat(t *testing.T) {
+	a, err := Load([]byte(`{"w":100.0,"h":8e1,"fr":10,"ip":0,"op":20,"layers":[]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Width != 100 || a.Height != 80 {
+		t.Fatalf("size = %dx%d, want 100x80", a.Width, a.Height)
+	}
+	for _, size := range []string{`"w":100.5,"h":80`, `"w":0,"h":80`, `"w":100,"h":-80`, `"w":"100","h":80`} {
+		if _, err := Load([]byte(`{` + size + `,"fr":10,"ip":0,"op":20,"layers":[]}`)); err == nil {
+			t.Errorf("Load accepted %s", size)
+		}
+	}
+}
+
+// Groups nest as deep as maxGroupDepth; deeper, Load says so rather than
+// recursing without bound.
+func TestGroupNestingDepth(t *testing.T) {
+	nest := func(depth int) string {
+		s := redRect
+		for range depth {
+			s = `{"ty":"gr","it":[` + s + `]}`
+		}
+		return `{"w":100,"h":80,"fr":10,"ip":0,"op":20,"layers":[{"ty":4,"shapes":[` + s + `]}]}`
+	}
+	a, err := Load([]byte(nest(maxGroupDepth)))
+	if err != nil {
+		t.Fatalf("%d nested groups: %v", maxGroupDepth, err)
+	}
+	if got := renderAt(a, 0).RGBAAt(50, 40); got.R != 255 || got.G != 0 {
+		t.Fatalf("deepest group's center = %v, want red", got)
+	}
+	if _, err := Load([]byte(nest(maxGroupDepth + 1))); err == nil || !strings.Contains(err.Error(), "nest deeper") {
+		t.Fatalf("%d nested groups: error %v, want a nesting error", maxGroupDepth+1, err)
+	}
+}
+
+// Load makes the outlines of a group whose geometry is static once, and
+// every frame draws those; only animated geometry is sampled again.
+func TestStaticGeometryIsRetained(t *testing.T) {
+	growing := `{"ty":"rc","p":{"k":[50,40]},"s":{"a":1,"k":[{"t":0,"s":[10,10],"e":[40,20]},{"t":10,"s":[40,20]}]}},{"ty":"fl","c":{"k":[0,0,1]}}`
+	a := mustLoad(t, `{"ty":4,"shapes":[{"ty":"gr","it":[`+redRect+`]},{"ty":"gr","it":[`+growing+`]}]}`)
+	shapes := &a.layers[0].groups[0]
+	static, animated := &shapes.groups[0], &shapes.groups[1]
+	if len(static.outlines) != 1 || static.animated {
+		t.Fatalf("static group: %d retained outlines, animated %v; want 1, false", len(static.outlines), static.animated)
+	}
+	for _, frame := range []float32{0, 7, 19} {
+		if got := static.outlinesAt(frame); len(got) != 1 || &got[0] != &static.outlines[0] {
+			t.Fatalf("frame %v: static group's outlines were made again", frame)
+		}
+	}
+	if animated.outlines != nil || !animated.animated {
+		t.Fatal("animated group retained its outlines")
+	}
+	if a, b := animated.outlinesAt(0)[0].Vertices[0], animated.outlinesAt(10)[0].Vertices[0]; a == b {
+		t.Fatalf("animated rectangle did not change: %v at both frames", a)
+	}
+}
+
+// Players of one animation draw it at once on several goroutines: Draw
+// only reads what Load made.
+func TestSharedAnimationDrawsConcurrently(t *testing.T) {
+	a := movingAnimation(t)
+	want := renderAt(a, 10)
+	images := make(chan *image.RGBA)
+	for range 4 {
+		go func() { images <- renderAt(a, 10) }()
+	}
+	for range 4 {
+		if !samePixels(<-images, want) {
+			t.Error("a concurrent Draw drew differently")
+		}
 	}
 }
