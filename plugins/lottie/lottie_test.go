@@ -338,7 +338,7 @@ func edgePixels(img *image.RGBA) int {
 }
 
 // A shape layer's keyframes are in composition frames: its start time
-// moves nothing but precomps, which the subset rejects.
+// moves nothing but what a precomposition shows (TestPrecompositionTime).
 func TestLayerStartTimeKeepsCompositionFrames(t *testing.T) {
 	a := mustLoad(t, `{"ty":4,"st":10,"ks":{"p":{"a":1,"k":[{"t":0,"s":[0,0],"e":[40,0]},{"t":10,"s":[40,0]}]}},"shapes":[{"ty":"rc","p":{"k":[20,40]},"s":{"k":[20,20]}},{"ty":"fl","c":{"k":[1,0,0,1]}}]}`)
 	for _, tc := range []struct {

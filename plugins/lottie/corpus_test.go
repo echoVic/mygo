@@ -134,12 +134,12 @@ var (
 	corpusSnippet  = regexp.MustCompile(`(want a number, got ).*`)
 	corpusQuoted   = regexp.MustCompile(`"(?:[^"\\]|\\.)*"`)
 	corpusNumber   = regexp.MustCompile(`-?\b\d+(?:\.\d+)?(?:[eE][-+]?\d+)?\b`)
-	corpusLocation = regexp.MustCompile(`(?:layer|nested group|item) N: `)
+	corpusLocation = regexp.MustCompile(`(?:layer|nested group|item) N: |precomposition "…": `)
 )
 
 // normalizeError makes like errors alike: their numbers N, their quoted
 // strings "…", as the JSON that a number's error quotes, and without where
-// in the file they are, which layer, group or item.
+// in the file they are, which layer, group, item or precomposition.
 func normalizeError(msg string) string {
 	msg = corpusSnippet.ReplaceAllString(msg, "${1}…")
 	msg = corpusQuoted.ReplaceAllString(msg, `"…"`)

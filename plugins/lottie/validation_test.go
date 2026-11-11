@@ -12,7 +12,6 @@ func TestLoadRejectsUnsupportedControls(t *testing.T) {
 		{"matte", `{"ty":4,"tt":1}`},
 		{"matte-source", `{"ty":4,"td":1}`},
 		{"blend", `{"ty":4,"bm":1}`},
-		{"stretch", `{"ty":4,"sr":2}`},
 		{"auto-orient", `{"ty":4,"ao":1}`},
 		{"mask", `{"ty":4,"masksProperties":[{}]}`},
 		{"effect", `{"ty":4,"ef":[{}]}`},

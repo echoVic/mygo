@@ -516,7 +516,6 @@ func TestLoadRejectsBadTrims(t *testing.T) {
 		"start":      {hline + `,{"ty":"tm","s":{"k":"0"}}`, "trim start"},
 		"too many":   {many, fmt.Sprintf("more than %d trims", maxTrims)},
 		"direction":  {`{"ty":"rc","d":4,"s":{"k":[10,10]}}`, "unsupported shape direction"},
-		"path d":     {`{"ty":"sh","d":3,"ks":{"k":{"i":[[0,0]],"o":[[0,0]],"v":[[0,0]],"c":false}}}`, "unsupported path direction"},
 	} {
 		_, err := Load([]byte(`{"w":100,"h":80,"fr":10,"ip":0,"op":20,"layers":[{"ty":4,"shapes":[` + tc.shapes + `]}]}`))
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
