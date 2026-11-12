@@ -2277,16 +2277,18 @@ answers once `navigator.clipboard.writeText` settles (it rejects without
 transient user activation, and outside secure contexts there is no
 `navigator.clipboard` to write).
 
-`Clipboard.OnChanged` shares one backend watch across listeners. The core
-coalesces notifications and defers callbacks until clipboard operations and
-other change callbacks unwind; removing the last listener stops the watch,
-and so does quitting. Only apps that observe the clipboard link the watch:
-the first `OnChanged` hooks it into the clipboard's operations and
+`Clipboard.OnChanged` keeps its listeners in a `listeners[func()]` and
+shares one backend watch across them, started once the app is ready. The
+core coalesces notifications and defers callbacks until clipboard operations
+and other change callbacks unwind; removing the last listener stops the
+watch, and so does quitting. Only apps that observe the clipboard link the
+watch: the first `OnChanged` hooks it into the clipboard's operations and
 `App.OnQuit`.
 Windows uses its hidden app window for `WM_CLIPBOARDUPDATE`, GTK reuses its
-owner-change signal, and macOS installs an NSTimer only while subscribed.
-Observation never reads clipboard types or providers. Browser and unsupported
-backends reject it.
+owner-change signal, and macOS installs an NSTimer only while subscribed,
+with a tolerance of a tenth of its interval. Observation never reads
+clipboard types or providers. Browser and unsupported backends refuse the
+watch, which leaves the listeners uncalled.
 
 ## Audio (`audio`)
 

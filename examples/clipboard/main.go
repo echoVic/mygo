@@ -122,15 +122,10 @@ func main() {
 	d := &demo{note: note{Title: "A portable note", Body: "Shared clipboard and drag representations."}}
 	mygo.App.WhenReady(func() {
 		d.win = mygo.NewWindow(mygo.WindowOptions{Title: "MyGo Clipboard", Width: 640, Height: 580, Content: ui.View(d.view)})
-		off, err := mygo.Clipboard.OnChanged(func() {
+		d.win.OnClosed(mygo.Clipboard.OnChanged(func() {
 			d.changes++ // observing changes does not request the note's JSON
 			d.win.Invalidate()
-		})
-		if err != nil {
-			d.status = "Clipboard observation unavailable: " + err.Error()
-		} else {
-			d.win.OnClosed(off)
-		}
+		}))
 	})
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)

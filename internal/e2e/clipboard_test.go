@@ -278,15 +278,11 @@ func TestUnifiedClipboardForeignOwnershipAndShutdown(t *testing.T) {
 		t.Fatal(err)
 	}
 	var foreignChanges atomic.Int32
-	off, err := mygo.Clipboard.OnChanged(func() {
+	t.Cleanup(mygo.Clipboard.OnChanged(func() {
 		if slices.Contains(mygo.Clipboard.Formats(), clipboardCustom) {
 			foreignChanges.Add(1)
 		}
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(off)
+	}))
 	ctx, cancel := context.WithTimeout(context.Background(), wait.Guard)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^$")

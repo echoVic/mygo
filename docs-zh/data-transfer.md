@@ -52,6 +52,29 @@ if err == nil {
 
 现有的 `ReadText`、`WriteText`、`ReadHTML`、`WriteHTML`、`ReadImage`、`WriteImage` 和 `Clear` 保持原有签名。`WriteHTML` 在所有平台上都提供 HTML 和文本回退，修复了 Linux 以前只能处理文本的行为。`WriteImage` 在替换现有数据之前校验 PNG；原生图像读取器仍然接受 TIFF、GTK 图像目标和 Windows DIB。`WriteFiles` 和 `ReadFiles` 交换原生文件列表。`Write`/`WriteFiles` 传入空内容时会清除剪贴板。写入失败时不会安装它的释放钩子。
 
+## 观察变化
+
+`Clipboard.OnChanged` 观察本应用或其他应用造成的变化，并像其他 `On…` 监听器一样返回停止观察的函数。它不读取剪贴板内容，也不调用内容的提供方。在回调中只读取你的应用需要的格式：
+
+```go
+off := mygo.Clipboard.OnChanged(func() {
+    // Called on the main thread. The contents can change again before Read.
+    data, err := mygo.Clipboard.Read(transfer.Text)
+    if err == nil {
+        text, _ := data.Read(transfer.Text)
+        // Use text; avoid retaining sensitive clipboard contents by default.
+        _ = text
+    }
+})
+win.OnClosed(off) // when this window no longer needs the observation
+```
+
+注册时不会报告初始内容。多次通知可能被合并，所以这是让你读取当前剪贴板的提示，而不是完整的历史，也不是某一次复制的快照。读取或延迟渲染本身也可能产生原生通知；不要在每次回调中无条件地写入剪贴板。回调可以读取或写入剪贴板，并会推迟到原生剪贴板操作和之前的回调返回之后。像其他主线程事件处理器一样，让回调保持简短。
+
+监听器共用一个原生观察，它在应用就绪后开始：可以在 `App.Run` 之前添加监听器。`off` 可以在任何 goroutine 中调用，可以重复调用，也可以在回调中调用；在一次变化的投递过程中被移除的监听器仍可能收到这一次。移除最后一个监听器会停止观察，退出应用也会。观察不会触碰剪贴板持有的任何内容，所以剪贴板提供方可以添加和移除监听器。
+
+Windows 使用 `AddClipboardFormatListener`；Linux 使用 GTK 的 `owner-change` 信号，取决于桌面是否公开变化（尤其是在 Wayland 上）。macOS 没有公开的粘贴板变化通知，所以在订阅期间它每 250 ms 只检查一次 `changeCount`，并带有 25 ms 的容差，让系统可以把这个定时器和其他唤醒一起触发。两次检查之间被覆盖的变化无法恢复。浏览器不提供对系统剪贴板的观察：在那里回调永远不会被调用。
+
 ## 惰性提供方与所有权
 
 每次写入和每次拖放都会获取一个新的 `Data.Snapshot`。惰性提供方被请求时，对那个快照最多运行一次；成功、错误和已恢复的 panic（`transfer.ErrProviderPanic`）都会被缓存。发现和偏好协商不会请求字节。原生接收方（包括剪贴板管理器）可能在发布后立刻请求字节。`Read` 只请求它选中的格式。提供方出错会导致该次读取被拒绝，其他表示形式仍然可用。

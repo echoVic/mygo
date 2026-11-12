@@ -42,10 +42,7 @@ func (c *clipboardChanges) count() int {
 func TestClipboardChangeNotifications(t *testing.T) {
 	preserveClipboard(t)
 	var first, second clipboardChanges
-	off, err := mygo.Clipboard.OnChanged(first.listen)
-	if err != nil {
-		t.Fatal(err)
-	}
+	off := mygo.Clipboard.OnChanged(first.listen)
 	t.Cleanup(off)
 	mygo.Clipboard.WriteText("clipboard observation 日本語")
 	wait.Until(t, "a change with the text written", first.heard("clipboard observation 日本語"))
@@ -54,11 +51,7 @@ func TestClipboardChangeNotifications(t *testing.T) {
 
 	// A listener that stays tells when a change was delivered: once it heard
 	// the next one, the listener removed before could have heard it too.
-	offSecond, err := mygo.Clipboard.OnChanged(second.listen)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(offSecond)
+	t.Cleanup(mygo.Clipboard.OnChanged(second.listen))
 	off()
 	off()
 	heard := first.count()

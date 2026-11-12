@@ -3,7 +3,6 @@
 package mygo
 
 import (
-	"errors"
 	"sync/atomic"
 	"testing"
 
@@ -13,10 +12,7 @@ import (
 
 func watchClipboard(t *testing.T, fn func()) func() {
 	t.Helper()
-	off, err := Clipboard.OnChanged(fn)
-	if err != nil {
-		t.Fatal(err)
-	}
+	off := Clipboard.OnChanged(fn)
 	t.Cleanup(off)
 	return off
 }
@@ -141,15 +137,8 @@ func TestClipboardChangesCancelQueuedAndRestart(t *testing.T) {
 	onMain(func() {
 		fb.EmitClipboardChange()
 		off()
-		var err error
-		next, err = Clipboard.OnChanged(func() { current.Add(1) })
-		if err != nil {
-			t.Error(err)
-		}
+		next = Clipboard.OnChanged(func() { current.Add(1) })
 	})
-	if next == nil {
-		t.Fatal("failed to restart")
-	}
 	t.Cleanup(next)
 	drainClipboardChanges()
 	if old.Load() != 0 || current.Load() != 0 {
@@ -174,22 +163,47 @@ func TestClipboardChangesCancelFromCallback(t *testing.T) {
 	onMain(func() { fb.EmitClipboardChange() })
 	drainClipboardChanges()
 	if first.Load() != 1 || second.Load() != 0 {
-		t.Fatal("removed listener ran from the pending snapshot")
+		t.Fatal("a listener heard a change after the last ones were removed")
 	}
 }
 
-func TestClipboardChangesErrorsAndShutdown(t *testing.T) {
-	onMain(func() { fb.ClipboardWatchError = platform.ErrUnsupported })
-	off, err := Clipboard.OnChanged(func() { t.Error("failed watch called") })
-	onMain(func() { fb.ClipboardWatchError = nil })
-	if off != nil || !errors.Is(err, platform.ErrUnsupported) {
-		t.Fatalf("watch failure: %v", err)
-	}
+// A backend that cannot observe the clipboard leaves the listeners
+// uncalled, and the next listener asks it again.
+func TestClipboardChangesUnobservable(t *testing.T) {
 	var calls atomic.Int32
-	off = watchClipboard(t, func() { calls.Add(1) })
+	onMain(func() { fb.ClipboardWatchError = platform.ErrUnsupported })
+	starts := onMainValue(func() int { return fb.ClipboardWatchStarts })
+	off := Clipboard.OnChanged(func() { calls.Add(1) })
+	t.Cleanup(off)
+	onMain(func() {
+		fb.EmitClipboardChange()
+		if fb.ClipboardWatchStarts != starts {
+			t.Error("a failed watch counts as started")
+		}
+		fb.ClipboardWatchError = nil
+	})
+	drainClipboardChanges()
+	if calls.Load() != 0 {
+		t.Fatal("a listener heard a clipboard nobody watches")
+	}
+	watchClipboard(t, func() { calls.Add(1) })
+	onMain(func() { fb.EmitClipboardChange() })
+	drainClipboardChanges()
+	if calls.Load() != 2 {
+		t.Fatalf("listeners heard %d changes once the backend watched, want 2", calls.Load())
+	}
+}
+
+func TestClipboardChangesShutdown(t *testing.T) {
+	var calls atomic.Int32
+	off := watchClipboard(t, func() { calls.Add(1) })
+	stops := onMainValue(func() int { return fb.ClipboardWatchStops })
 	onMain(func() {
 		fb.EmitClipboardChange()
 		clipboardChanges.close() // the cleanup the app runs when it quits (App.OnQuit)
+		if fb.ClipboardWatchStops-stops != 1 {
+			t.Error("quitting left the native watch running")
+		}
 	})
 	off()
 	drainClipboardChanges()
@@ -199,23 +213,72 @@ func TestClipboardChangesErrorsAndShutdown(t *testing.T) {
 	onMain(func() {
 		clipboardStopped = true
 		defer func() { clipboardStopped = false }()
-		if off, err := Clipboard.OnChanged(func() {}); off != nil || !errors.Is(err, errLoopStopped) {
-			t.Errorf("watch after shutdown: %v", err)
+		starts := fb.ClipboardWatchStarts
+		Clipboard.OnChanged(func() {})()
+		if fb.ClipboardWatchStarts != starts {
+			t.Error("a listener added after shutdown started a native watch")
 		}
 	})
 }
 
-func TestClipboardChangesRejectProviderReentry(t *testing.T) {
+// Watching touches nothing the clipboard holds, so a provider, which may
+// not read or write the clipboard, may add a listener.
+func TestClipboardChangesFromProvider(t *testing.T) {
 	t.Cleanup(Clipboard.Clear)
+	var calls atomic.Int32
+	var off func()
 	if err := Clipboard.Write(transfer.New(transfer.NewItem(transfer.Lazy(transfer.Text, func() ([]byte, error) {
-		if off, err := Clipboard.OnChanged(func() {}); off != nil || !errors.Is(err, ErrClipboardReentrant) {
-			t.Errorf("subscription in provider: %v", err)
-		}
+		off = Clipboard.OnChanged(func() { calls.Add(1) })
 		return []byte("text"), nil
 	})))); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Clipboard.ReadFormat(transfer.Text); err != nil {
 		t.Fatal(err)
+	}
+	if off == nil {
+		t.Fatal("the provider did not run")
+	}
+	t.Cleanup(off)
+	drainClipboardChanges()
+	before := calls.Load()
+	onMain(func() { fb.EmitClipboardChange() })
+	drainClipboardChanges()
+	if calls.Load() != before+1 {
+		t.Fatalf("a listener added by a provider heard %d changes, want 1", calls.Load()-before)
+	}
+}
+
+// A listener added before the app is ready, as main's are before App.Run,
+// is watched for once it is.
+func TestClipboardChangesBeforeReady(t *testing.T) {
+	var calls atomic.Int32
+	starts := onMainValue(func() int { return fb.ClipboardWatchStarts })
+	App.mu.Lock()
+	App.ready = false
+	App.mu.Unlock()
+	off := Clipboard.OnChanged(func() { calls.Add(1) })
+	t.Cleanup(off)
+	// What the app does when it finishes launching.
+	App.mu.Lock()
+	App.ready = true
+	pending := App.whenReady
+	App.whenReady = nil
+	App.mu.Unlock()
+	onMain(func() {
+		if fb.ClipboardWatchStarts != starts {
+			t.Error("the native watch started before the app was ready")
+		}
+		for _, fn := range pending {
+			fn()
+		}
+		if fb.ClipboardWatchStarts-starts != 1 {
+			t.Errorf("the app becoming ready started %d native watches, want 1", fb.ClipboardWatchStarts-starts)
+		}
+		fb.EmitClipboardChange()
+	})
+	drainClipboardChanges()
+	if calls.Load() != 1 {
+		t.Fatalf("a listener added before the app was ready heard %d changes, want 1", calls.Load())
 	}
 }
