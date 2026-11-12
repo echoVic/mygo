@@ -330,6 +330,19 @@ to the app, which updates ship. `security
 find-identity -v -p codesigning` lists your identities, and `mygo doctor`
 counts the Developer IDs.
 
+`codesign` asks for what it lacks in a dialog on the Mac's screen: the
+password of a locked keychain, or leave to use the identity's key. It
+waits for the answer as long as it takes, so a build that nobody watches,
+behind a locked screen, over SSH or in CI, stops there. After 15 seconds
+`mygo build` and `mygo dev` say that `codesign` may be waiting. Where
+nobody can answer, unlock the keychain before the build and let `codesign`
+use the key, as the [workflow for GitHub Actions](github-actions.md) does:
+
+```sh
+security unlock-keychain ~/Library/Keychains/login.keychain-db
+security set-key-partition-list -S apple-tool:,apple: -s ~/Library/Keychains/login.keychain-db
+```
+
 ### Info.plist and entitlements
 
 `macos.infoPlist` adds keys to the app's `Info.plist`, or replaces MyGo's,

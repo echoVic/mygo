@@ -112,8 +112,9 @@ func buildDMG(c *Config, app, dir, goarch string, opts buildOptions) (_ string, 
 		return "", err
 	}
 	if opts.sign != "-" {
-		if err := command("codesign", "--force", "--timestamp", "--sign", opts.sign, dmg); err != nil {
-			return "", err
+		args := []string{"--force", "--timestamp", "--sign", opts.sign, dmg}
+		if out, err := signCode(file, opts.sign, args...); err != nil {
+			return "", fmt.Errorf("codesign %s: %v\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 		}
 	}
 	t.done("Created " + file)

@@ -899,7 +899,7 @@ func signNestedCode(c *Config, app, identity string, production bool) error {
 			}
 		}
 		args := nestedCodesignArgs(identity, ent, production)
-		if out, err := exec.Command("codesign", append(args, n.path)...).CombinedOutput(); err != nil {
+		if out, err := signCode(n.name, identity, append(args, n.path)...); err != nil {
 			return fmt.Errorf("codesign %s: %v\n%s", n.name, err, out)
 		}
 		signed = append(signed, n)
