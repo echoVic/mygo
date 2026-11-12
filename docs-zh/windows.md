@@ -51,6 +51,7 @@ mygo.NewWindow(mygo.WindowOptions{Title: "Inspector", Content: ui.View(app.view)
 | `CornerRadius` | 给无边框窗口加圆角：在 macOS 上，其内容和材质会被裁切到这些圆角；Windows 11 则会给它加上自己的圆角 |
 | `BackgroundColor` | 在页面绘制之前填充窗口，使用 CSS 语法，如 `"#1e1e1e"`，或 `"light-dark(#f5f5f7, #1e1e1e)"` 以跟随外观 |
 | `Opacity` | 0 到 1 之间 |
+| `IgnoreMouseEvents` | 创建窗口时就让鼠标穿透到它背后的内容，如同之后调用 `SetIgnoreMouseEvents(true)`（见[点击穿透窗口](#点击穿透窗口)） |
 | `DisableResize`, `DisableMove`, `DisableMinimize`, `DisableMaximize`, `DisableClose`, `DisableFullScreen`, `DisableShadow` | 去掉相应能力。在 Wayland 下的 Linux 上，`DisableShadow` 让无边框窗口或隐藏式标题栏去掉 GTK 在它们周围绘制的阴影和边框 |
 | `AlwaysOnTop` | 让窗口保持在其他窗口之上 |
 | `SkipTaskbar` | 让窗口不出现在任务栏中（Linux、Windows） |
@@ -179,7 +180,7 @@ win.Focus()             // Blur, IsFocused
 - `SetAutoHideMenuBar` 隐藏菜单栏，直到按 Alt 或 F10，或永久重新显示它（Linux、Windows）。
 - `SetVisibleOnAllWorkspaces` 在每个 Space 或虚拟桌面上显示它（macOS、Linux）；在 macOS 上还会像浮层一样显示在全屏的其他应用之上，即使设置了 `DisableFullScreen`，只要应用是辅助应用（`ActivationPolicyAccessory`、`App.Dock.Hide`）：macOS 在那里不显示常规应用的窗口，只显示[面板](#面板)。
 - `SetContentProtection(true)` 让它不出现在截图和屏幕录制中。
-- `SetIgnoreMouseEvents(true)` 让点击穿透到它背后的内容，`SetInputRegion` 则除其某些部分上的点击外全部放行（见[点击穿透窗口](#点击穿透窗口)）。
+- `SetIgnoreMouseEvents(true)` 让点击穿透到它背后的内容，`IgnoresMouseEvents` 读回这一状态，`SetInputRegion` 则除其某些部分上的点击外全部放行（见[点击穿透窗口](#点击穿透窗口)）。
 - `SetActiveAppearance(true)` 在另一个应用位于前面时仍把窗口绘制为活动状态（macOS），使浮在它上面的面板所用的清透 Liquid Glass（`VibrancyGlassClear`）保持清透。它使用一个私有的 AppKit 调用，之后的 macOS 可能会移除它：面向 Mac App Store 的应用应让它保持关闭。此时其材质、页面和原生 UI 也都保持活动，在每个平台上都是如此（见[活动与非活动窗口](#活动与非活动窗口)）。
 - `SetWindowButtonsTheme(mygo.ThemeDark)` 在浅色应用中，把隐藏式标题栏的窗口按钮按深色背景绘制，就像它们位于页面顶部的深色视图之上；浅色背景则用 `ThemeLight`；`ThemeSystem` 再次跟随应用。页面和菜单保持应用的外观（Windows；macOS 和 Linux 的按钮保持应用的外观）。
 - `SetProgressBar` 在任务栏按钮（Windows）、Dock 图标（macOS）或启动器条目（支持它的 Linux 坞）上显示任务进度：

@@ -871,6 +871,8 @@ func (w *window) SetVibrancy(string)              {}
 func (w *window) SetVibrancyTint(*platform.Color) {}
 func (w *window) SetActiveAppearance(bool)        {}
 
+func (w *window) IgnoresMouseEvents() bool { return w.ignoreMouse }
+
 func (w *window) SetIgnoreMouseEvents(v bool) {
 	w.ignoreMouse = v
 	w.applyInputShape(true)

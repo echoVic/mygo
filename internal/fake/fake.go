@@ -580,6 +580,8 @@ type Window struct {
 	// capture is the page's capture of each kind (SetCapture).
 	capture [platform.CaptureDisplay + 1]platform.CaptureState
 	pip     bool // TogglePictureInPicture
+	// ignoreMouse is what SetIgnoreMouseEvents was given last.
+	ignoreMouse bool
 	// Restored is the last state RestoreSessionState put back.
 	Restored []byte
 	// Dropped is what DroppedFiles returns, once.
@@ -784,7 +786,8 @@ func (w *Window) SetOpacity(float64)              {}
 func (w *Window) Opacity() float64                { return 1 }
 func (w *Window) SetHasShadow(bool)               {}
 func (w *Window) HasShadow() bool                 { return true }
-func (w *Window) SetIgnoreMouseEvents(bool)       {}
+func (w *Window) SetIgnoreMouseEvents(v bool)     { w.mu.Lock(); w.ignoreMouse = v; w.mu.Unlock() }
+func (w *Window) IgnoresMouseEvents() bool        { w.mu.Lock(); defer w.mu.Unlock(); return w.ignoreMouse }
 func (w *Window) SetContentProtection(bool)       {}
 func (w *Window) SetVibrancy(string)              {}
 func (w *Window) SetVibrancyTint(*platform.Color) {}

@@ -172,6 +172,11 @@ type WindowOptions struct {
 	CornerRadius int
 	// Opacity of the window between 0 and 1 (default 1).
 	Opacity float64
+	// IgnoreMouseEvents creates the window letting the mouse through to
+	// what is behind it, as SetIgnoreMouseEvents(true) does: an overlay
+	// that marks a part of the screen never takes a click, not even
+	// between its creation and that call.
+	IgnoreMouseEvents bool
 	// Parent makes this window a child window that stays on top of it
 	// and closes with it. It can go to any display, and stays where it is
 	// as its parent moves. On macOS it is ordered above its parent
@@ -658,6 +663,11 @@ func newWindow(opts WindowOptions, bg, tint *background, native uintptr, flyout 
 		panic(fmt.Sprintf("mygo: cannot create window: %v", err))
 	}
 	w.native = nw
+	if opts.IgnoreMouseEvents {
+		// Before the window shows, and on the turn that made it: no click
+		// reaches it in between.
+		nw.SetIgnoreMouseEvents(true)
+	}
 	if w.stateKey != "" {
 		w.initState(popts)
 	}
@@ -1311,6 +1321,12 @@ func (w *Window) HasShadow() bool { return get(w, platform.Window.HasShadow) }
 func (w *Window) SetIgnoreMouseEvents(v bool) {
 	w.do(func(n platform.Window) { n.SetIgnoreMouseEvents(v) })
 }
+
+// IgnoresMouseEvents reports whether the window lets the mouse through, as
+// SetIgnoreMouseEvents or WindowOptions.IgnoreMouseEvents made it. A
+// window with an input region (SetInputRegion) takes the mouse on a part
+// of it, and does not ignore it.
+func (w *Window) IgnoresMouseEvents() bool { return get(w, platform.Window.IgnoresMouseEvents) }
 
 // SetInputRegion limits the part of the window that takes the mouse to
 // rects, in DIPs from the top-left corner of its content: presses, moves

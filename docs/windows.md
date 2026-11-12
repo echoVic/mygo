@@ -58,6 +58,7 @@ on the screen. Sizes and positions are in device-independent pixels.
 | `CornerRadius` | rounds a frameless window's corners: its content and material are cut to them on macOS, and Windows 11 gives it its own rounded corners |
 | `BackgroundColor` | fills the window until the page paints, in CSS syntax such as `"#1e1e1e"`, or `"light-dark(#f5f5f7, #1e1e1e)"` to follow the appearance |
 | `Opacity` | between 0 and 1 |
+| `IgnoreMouseEvents` | creates the window letting the mouse through to what is behind it, as `SetIgnoreMouseEvents(true)` does later (see [click-through windows](#click-through-windows)) |
 | `DisableResize`, `DisableMove`, `DisableMinimize`, `DisableMaximize`, `DisableClose`, `DisableFullScreen`, `DisableShadow` | take abilities away. On Linux under Wayland, `DisableShadow` keeps a frameless window or a hidden title bar without the shadow and border GTK draws around them |
 | `AlwaysOnTop` | keeps the window above others |
 | `SkipTaskbar` | leaves the window out of the taskbar (Linux, Windows) |
@@ -274,7 +275,8 @@ Other properties:
 - `SetContentProtection(true)` keeps it out of screenshots and screen
   recordings.
 - `SetIgnoreMouseEvents(true)` lets clicks through to what is behind it,
-  and `SetInputRegion` all of them but those on parts of it (see
+  which `IgnoresMouseEvents` reads back, and `SetInputRegion` all of them
+  but those on parts of it (see
   [click-through windows](#click-through-windows)).
 - `SetActiveAppearance(true)` keeps the window drawn as active while
   another app is in front (macOS), so that the clear Liquid Glass

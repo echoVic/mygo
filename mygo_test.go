@@ -163,6 +163,35 @@ func call(t *testing.T, fw *fake.Window, id int, method string, args ...any) map
 	})
 }
 
+// A window made with IgnoreMouseEvents lets the mouse through from the
+// start, as one given SetIgnoreMouseEvents(true) does later.
+func TestWindowIgnoreMouseEvents(t *testing.T) {
+	w, _ := testWindow(t, WindowOptions{})
+	if w.IgnoresMouseEvents() {
+		t.Error("a window takes the mouse by default, and says it ignores it")
+	}
+	w.SetIgnoreMouseEvents(true)
+	if !w.IgnoresMouseEvents() {
+		t.Error("IgnoresMouseEvents is false after SetIgnoreMouseEvents(true)")
+	}
+	w.SetIgnoreMouseEvents(false)
+	if w.IgnoresMouseEvents() {
+		t.Error("IgnoresMouseEvents is true after SetIgnoreMouseEvents(false)")
+	}
+
+	through, fw := testWindow(t, WindowOptions{IgnoreMouseEvents: true})
+	if !fw.IgnoresMouseEvents() {
+		t.Error("the backend's window made with IgnoreMouseEvents takes the mouse")
+	}
+	if !through.IgnoresMouseEvents() {
+		t.Error("IgnoresMouseEvents is false for a window made with IgnoreMouseEvents")
+	}
+	through.Destroy()
+	if through.IgnoresMouseEvents() {
+		t.Error("a destroyed window says it ignores the mouse")
+	}
+}
+
 func TestWindowDefaults(t *testing.T) {
 	w, fw := testWindow(t, WindowOptions{})
 	o := fw.Opts

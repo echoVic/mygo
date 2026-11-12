@@ -120,6 +120,7 @@ func (w *window) Opacity() float64                           { return 1 }
 func (w *window) SetHasShadow(bool)                          {}
 func (w *window) HasShadow() bool                            { return false }
 func (w *window) SetIgnoreMouseEvents(bool)                  {}
+func (w *window) IgnoresMouseEvents() bool                   { return false }
 func (w *window) SetContentProtection(bool)                  {}
 func (w *window) SetVibrancy(string)                         {}
 func (w *window) SetVibrancyTint(*platform.Color)            {}
