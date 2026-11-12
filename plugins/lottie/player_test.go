@@ -118,16 +118,43 @@ func TestPlayerInvalidSpeeds(t *testing.T) {
 }
 
 func TestReduceMotion(t *testing.T) {
-	p := movingAnimation(t).NewPlayer(PlayerOptions{Loop: true})
-	p.Seek(time.Second)
-	tester, calls, _ := playerTester(p, true)
+	anim := movingAnimation(t)
+	p := anim.NewPlayer(PlayerOptions{Loop: true})
+	tester, calls, services := playerTester(p, true)
 	if x := inkBounds(tester.Image()).Min.X; x != 5 {
-		t.Fatalf("reduced motion x = %d", x)
+		t.Fatalf("reduced motion x = %d, want the first frame's 5", x)
 	}
 	n := *calls
 	tester.Advance(10 * time.Second)
 	if *calls != n {
 		t.Fatal("reduced motion requested frames")
+	}
+	if x := inkBounds(tester.Image()).Min.X; x != 5 {
+		t.Fatalf("reduced motion advanced to x = %d", x)
+	}
+
+	// Seek and Reset still choose the frame shown: a jump is not motion.
+	p.Seek(time.Second)
+	services.Invalidate()
+	tester.Advance(20 * time.Millisecond)
+	paused := anim.NewPlayer()
+	paused.Pause()
+	paused.Seek(time.Second)
+	want, _, _ := playerTester(paused, false)
+	sought := inkBounds(tester.Image())
+	if w := inkBounds(want.Image()); sought != w || sought.Min.X == 5 {
+		t.Fatalf("reduced motion after seek shows %v, want %v", sought, w)
+	}
+	n = *calls
+	tester.Advance(10 * time.Second)
+	if *calls != n || inkBounds(tester.Image()) != sought {
+		t.Fatal("reduced motion moved on from the sought frame")
+	}
+	p.Reset()
+	services.Invalidate()
+	tester.Advance(20 * time.Millisecond)
+	if x := inkBounds(tester.Image()).Min.X; x != 5 {
+		t.Fatalf("reduced motion after reset x = %d, want 5", x)
 	}
 }
 

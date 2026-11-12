@@ -73,7 +73,8 @@ func (p *Player) Seek(at time.Duration) {
 
 // Draw aspect-fits the current frame into bounds, centered. Playback uses the
 // painter clock and requests paint-only frames while active. Reduced motion
-// shows the first frame without advancing or requesting frames.
+// holds the position without advancing or requesting frames: the first frame,
+// until Seek or Reset choose another, which is a jump rather than motion.
 func (p *Player) Draw(dst *ui.Painter, bounds ui.Rect) {
 	if p == nil || dst == nil || p.animation.Duration() == 0 {
 		return
@@ -101,9 +102,6 @@ func (p *Player) Draw(dst *ui.Painter, bounds ui.Rect) {
 	}
 	frame := a.inPoint + float32(p.position)*a.frameRate
 	active := !p.paused && !reduced && (p.loop || p.position < duration)
-	if reduced {
-		frame = a.inPoint
-	}
 	frame = min(frame, math.Nextafter32(a.outPoint, float32(math.Inf(-1))))
 	p.mu.Unlock()
 	a.drawAt(dst, bounds, frame)
