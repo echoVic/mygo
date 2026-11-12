@@ -72,7 +72,8 @@ The clock comes from `Painter.Now()`. No timer or goroutine is started.
 Pause and seek establish a fresh clock anchor at the next paint, so time
 spent paused does not advance the animation. A one-shot player holds the
 last frame and stops requesting frames. With reduced motion enabled,
-it draws the first frame and requests no animation frames. Give meaningful
+a player does not advance and requests no animation frames: it shows the
+first frame, or the one `Seek` or `Reset` chose. Give meaningful
 animations an accessible label and put essential state in text as well.
 
 ## Supported JSON
