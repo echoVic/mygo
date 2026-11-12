@@ -108,6 +108,7 @@ func main() {
 - [玻璃](plugins/glass.md)：原生 UI 的 Liquid Glass，在每个平台上都像 macOS 绘制的那样，带 macOS 的滚动边缘和背景模糊。
 - [游戏](plugins/game.md)：按需启用的游戏功能，包括固定步长的游戏循环及输入处理、摄像机，以及采用统一标准布局的游戏手柄。
 - [Loading](plugins/loading.md)：loading.dev 的 29 种原生 UI 加载指示器。
+- [Lottie](plugins/lottie.md)：用于原生 UI 的 Lottie 动画，由 MyGo 绘制和播放的 Lottie JSON 子集。
 - [SF Symbols](plugins/sfsymbols.md)：macOS 上用于原生 UI 的 Apple SF Symbols，由系统绘制。
 - [自动化](plugins/automation.md)：供端到端测试工具和智能体从其他进程控制运行中的应用，包括窗口、元素、输入、菜单和截图，以及面向智能体的命令行客户端 `mygo-automation`。
 - [PermissionFlow](plugins/permissionflow.md)：检查并请求需要用户授权的系统权限，例如“辅助功能”和“屏幕录制”，并引导用户前往“系统设置”，将应用拖入对应的权限列表。
