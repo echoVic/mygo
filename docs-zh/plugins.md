@@ -13,6 +13,7 @@
 - [玻璃](plugins/glass.md)：原生 UI 的 Liquid Glass，在每个平台上都像 macOS 绘制的那样，带 macOS 的滚动边缘和背景模糊。它完全用 Go 实现，带自己的着色器。
 - [游戏](plugins/game.md)：普通应用功能之外的游戏功能，按需启用：以固定步长运行的游戏循环及其输入处理、摄像机，以及采用统一标准布局的游戏手柄。完全用 Go 实现。
 - [Loading](plugins/loading.md)：用于原生 UI 的 loading.dev 29 种加载指示器，外观和动效与浏览器中一致。它完全用 Go 实现。
+- [Lottie](plugins/lottie.md)：用于原生 UI 的 Lottie 动画，由 MyGo 绘制和播放 Lottie JSON 的一个子集：形状、纯色、父子关系和预合成。它完全用 Go 实现。
 - [SF Symbols](plugins/sfsymbols.md)：macOS 上用于原生 UI 的 Apple SF Symbols，由系统绘制。它完全用 Go 实现。
 - [自动化](plugins/automation.md)：一个套接字，另一个进程（端到端测试运行器或智能体）通过它驱动运行中的应用：应用的窗口、其原生 UI 中的元素、输入、菜单、页面中的脚本和截图。它完全用 Go 实现，可选启用，且不包含在发布构建中；`mygo-automation` 是它面向智能体的命令行客户端。
 - [PermissionFlow](plugins/permissionflow.md)：检查和请求必须由用户授予的系统权限，例如辅助功能、屏幕录制和麦克风，并引导用户前往系统设置，将应用拖入权限列表，做法参照 PermissionFlow。完全用 Go 实现。
