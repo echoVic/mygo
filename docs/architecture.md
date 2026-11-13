@@ -1226,12 +1226,28 @@ never waits on the main thread, which receives the acknowledgments.
 `Page.Eval(code)` uses the webview's native async-function API
 (`callAsyncJavaScript` on macOS, `webkit_web_view_call_async_javascript_function`
 on Linux), which awaits promises and ignores the page's Content Security
-Policy. The code is first wrapped as `return JSON.stringify({ok, v: await (code)})`;
-if that fails to compile the code is not an expression, and it is run again as
-a function body. A compile error means nothing executed, so code never runs
+Policy. The code is first wrapped as an async arrow function returning
+`(code)`, whose result goes back as `JSON.stringify({ok, v})`; if that fails
+to compile the code is not an expression, and it is run again as the
+arrow's body. A compile error means nothing executed, so code never runs
 twice. The result travels as a JSON string and is decoded in Go. A page whose
 window closed never answers, so a window closing fails the evals waiting for
 it, and an eval with the quit under way fails at once.
+
+A document that goes away never settles what it was waiting for, and WebKit
+answers for its promise only once the garbage collector takes it
+("Completion handler for function call is no longer reachable"), which
+never happens while the page keeps it, as the back-forward cache keeps a
+page whole. So until the code answers, the wrapper listens for the page's
+`pagehide`, which answers `{left: true}`, and Eval returns "the page
+navigated away". In the same process the old document hears `pagehide`
+before the next one commits, so its answer reaches the app before the
+commit, on the same connection. To another site WebKit swaps the web
+process, and the old one puts its page away after the new one commits;
+its answer comes later, which a core failing evals at the commit would
+drop. An eval that reaches the next document runs there, and `pushState`
+and fragments fire no `pagehide`, so only the evals of the document left
+fail.
 
 ### Trust
 

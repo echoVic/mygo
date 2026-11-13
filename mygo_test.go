@@ -1132,11 +1132,11 @@ func TestEval(t *testing.T) {
 	fw.AsyncFunction = func(body string) (string, error) {
 		bodies = append(bodies, body)
 		switch {
-		case strings.Contains(body, "await(\ndocument.title\n)"):
+		case strings.Contains(body, "(async()=>(\ndocument.title\n))()"):
 			return `{"ok":true,"v":"Title"}`, nil
-		case strings.Contains(body, "await(\nlet x = 1; return x\n)"):
+		case strings.Contains(body, "(async()=>(\nlet x = 1; return x\n))()"):
 			return "", errors.New("SyntaxError: Unexpected token")
-		case strings.Contains(body, "await(async()=>{\nlet x = 1; return x\n})()"):
+		case strings.Contains(body, "(async()=>{\nlet x = 1; return x\n})()"):
 			return `{"ok":true,"v":1}`, nil
 		case strings.Contains(body, "boom"):
 			return `{"ok":false,"e":"boom"}`, nil
@@ -1163,6 +1163,13 @@ func TestEval(t *testing.T) {
 	fw.AsyncFunction = func(string) (string, error) { return "", fake.ErrNoReply }
 	if _, err := w.Page().EvalContext(ctx, "1"); !errors.Is(err, context.Canceled) {
 		t.Errorf("EvalContext with canceled context = %v", err)
+	}
+
+	// The page left before the code answered says so, rather than as the
+	// code's own error.
+	fw.AsyncFunction = func(string) (string, error) { return `{"left":true}`, nil }
+	if _, err := w.Page().Eval("pending"); !errors.Is(err, errNavigated) {
+		t.Errorf("Eval in a page left = %v, want %v", err, errNavigated)
 	}
 
 	// Only a syntax error means the code did not run: other failures are
