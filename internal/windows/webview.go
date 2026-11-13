@@ -816,7 +816,7 @@ func (w *window) CallAsyncFunction(body string, cb func(string, error)) {
 	w.withWebViewOr(func() {
 		w.devtools("Runtime.evaluate", string(params), func(result string, err error) {
 			if err != nil {
-				cb("", err)
+				cb("", devtoolsFailure("Runtime.evaluate", result, err))
 				return
 			}
 			var out struct {
@@ -849,7 +849,9 @@ func (w *window) CallAsyncFunction(body string, cb func(string, error)) {
 	}, func(err error) { cb("", err) })
 }
 
-// devtools calls a DevTools protocol method; done may be nil.
+// devtools calls a DevTools protocol method; done may be nil. A method
+// that fails gives done its error with the protocol's answer, if any,
+// which devtoolsFailure reads.
 func (w *window) devtools(method, params string, done func(string, error)) {
 	id := 0
 	if done != nil {
@@ -864,7 +866,7 @@ func (w *window) devtools(method, params string, done func(string, error)) {
 			return
 		}
 		if failed(hr) {
-			cb("", devtoolsFailure(method, hr, wstr(result)))
+			cb(wstr(result), hresultError(method, hr))
 			return
 		}
 		cb(wstr(result), nil)
@@ -879,14 +881,16 @@ func (w *window) devtools(method, params string, done func(string, error)) {
 	}
 }
 
-// devtoolsFailure is the error of method, which failed with hr and
-// result, the protocol's answer: {"error":{"code":…,"message":…},"id":…}.
-// An evaluation whose document went away is ErrNavigated: Chromium fails
-// what it waits for then, before the next document commits.
-func devtoolsFailure(method string, hr uintptr, result string) error {
-	var answer any
-	_ = json.Unmarshal([]byte(result), &answer)
-	top, _ := answer.(map[string]any)
+// devtoolsFailure is the error of method, which failed with err and
+// answer, the protocol's: {"error":{"code":…,"message":…},"id":…}, with
+// its message. An evaluation whose document went away is ErrNavigated:
+// Chromium fails what it waits for then, before the next document
+// commits. The callers that tell apps their errors call it, not devtools,
+// which the default menus' Paste reaches in every app.
+func devtoolsFailure(method, answer string, err error) error {
+	var a any
+	_ = json.Unmarshal([]byte(answer), &a)
+	top, _ := a.(map[string]any)
 	e, _ := top["error"].(map[string]any)
 	code, _ := e["code"].(float64)
 	message, _ := e["message"].(string)
@@ -894,9 +898,9 @@ func devtoolsFailure(method string, hr uintptr, result string) error {
 	case method == "Runtime.evaluate" && code == -32000 && message == "Inspected target navigated or closed":
 		return platform.ErrNavigated
 	case message != "":
-		return fmt.Errorf("mygo: %s failed: %s (HRESULT %#08x)", method, message, uint32(hr))
+		return fmt.Errorf("%w: %s", err, message)
 	}
-	return hresultError(method, hr)
+	return err
 }
 
 func (w *window) SetZoom(f float64) {
@@ -1226,7 +1230,7 @@ func (w *window) PrintToPDF(o platform.PDFOptions, cb func([]byte, error)) {
 	w.withWebViewOr(func() {
 		w.devtools("Page.printToPDF", string(params), func(res string, err error) {
 			if err != nil {
-				cb(nil, fmt.Errorf("mygo: printing to PDF: %w", err))
+				cb(nil, fmt.Errorf("mygo: printing to PDF: %w", devtoolsFailure("Page.printToPDF", res, err)))
 				return
 			}
 			var r struct {

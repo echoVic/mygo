@@ -14,24 +14,26 @@ import (
 func TestDevtoolsFailure(t *testing.T) {
 	const navigated = `{"error":{"code":-32000,"message":"Inspected target navigated or closed"},"id":4}` // as WebView2 answers
 	for _, c := range []struct {
-		method, result, want string
+		method, answer, want string
 	}{
 		{"Runtime.evaluate", navigated, platform.ErrNavigated.Error()},
-		{"Page.printToPDF", navigated, "mygo: Page.printToPDF failed: Inspected target navigated or closed (HRESULT 0x80070057)"},
-		{"Runtime.evaluate", `{"error":{"code":-32000,"message":"Execution context was destroyed."},"id":5}`, "mygo: Runtime.evaluate failed: Execution context was destroyed. (HRESULT 0x80070057)"},
-		{"Runtime.evaluate", `{"error":{"code":-32602,"message":"Inspected target navigated or closed"},"id":6}`, "mygo: Runtime.evaluate failed: Inspected target navigated or closed (HRESULT 0x80070057)"},
+		{"Page.printToPDF", navigated, "mygo: Page.printToPDF failed (HRESULT 0x80070057): Inspected target navigated or closed"},
+		{"Runtime.evaluate", `{"error":{"code":-32000,"message":"Execution context was destroyed."},"id":5}`, "mygo: Runtime.evaluate failed (HRESULT 0x80070057): Execution context was destroyed."},
+		{"Runtime.evaluate", `{"error":{"code":-32602,"message":"Inspected target navigated or closed"},"id":6}`, "mygo: Runtime.evaluate failed (HRESULT 0x80070057): Inspected target navigated or closed"},
 		{"Runtime.evaluate", "", "mygo: Runtime.evaluate failed (HRESULT 0x80070057)"},
 		{"Runtime.evaluate", "not json", "mygo: Runtime.evaluate failed (HRESULT 0x80070057)"},
 		{"Runtime.evaluate", "null", "mygo: Runtime.evaluate failed (HRESULT 0x80070057)"},
 		{"Runtime.evaluate", `[{"error":{}}]`, "mygo: Runtime.evaluate failed (HRESULT 0x80070057)"},
 		{"Runtime.evaluate", `{"error":"Inspected target navigated or closed"}`, "mygo: Runtime.evaluate failed (HRESULT 0x80070057)"},
 	} {
-		err := devtoolsFailure(c.method, 0x80070057, c.result)
+		failure := hresultError(c.method, 0x80070057)
+		err := devtoolsFailure(c.method, c.answer, failure)
 		if err.Error() != c.want {
-			t.Errorf("devtoolsFailure(%s, %q) = %q, want %q", c.method, c.result, err, c.want)
+			t.Errorf("devtoolsFailure(%s, %q) = %q, want %q", c.method, c.answer, err, c.want)
 		}
-		if got := errors.Is(err, platform.ErrNavigated); got != (c.want == platform.ErrNavigated.Error()) {
-			t.Errorf("devtoolsFailure(%s, %q) is ErrNavigated: %v", c.method, c.result, got)
+		left := c.want == platform.ErrNavigated.Error()
+		if errors.Is(err, platform.ErrNavigated) != left || errors.Is(err, failure) == left {
+			t.Errorf("devtoolsFailure(%s, %q) = %v: ErrNavigated %v, wraps the failure %v", c.method, c.answer, err, errors.Is(err, platform.ErrNavigated), errors.Is(err, failure))
 		}
 	}
 }

@@ -651,11 +651,13 @@ features GTK 4 lacks become X11-only code beside it.
   with a base URL serves the document from that URL the same way.
 - **Eval** goes through the DevTools protocol (`Runtime.evaluate` with
   `awaitPromise`), which reports syntax errors and ignores the page's CSP.
-  A method that fails has the protocol's message and its HRESULT in its
-  error. An evaluation whose document went away fails with code -32000,
-  "Inspected target navigated or closed", before the next document
-  commits, which the backend reports as `platform.ErrNavigated` (see
-  "Eval").
+  A method that fails gives its caller the HRESULT and the protocol's
+  answer, whose message Eval's and `PrintToPDF`'s errors carry
+  (`devtoolsFailure`, which only they link: the default menus' Paste
+  calls the protocol in every app). An evaluation whose document went
+  away fails with code -32000, "Inspected target navigated or closed",
+  before the next document commits, which the backend reports as
+  `platform.ErrNavigated` (see "Eval").
   Edit roles run `document.execCommand` with a user gesture, except Paste:
   `Input.dispatchKeyEvent` carries Chromium's `paste` command on an
   `Unidentified` raw key-down, followed by key-up once it completes. The
