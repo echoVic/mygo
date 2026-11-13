@@ -37,6 +37,32 @@ func Script(cfg Config) string {
 	return "(function(__MYGO_CONFIG__){\n" + source + "})(" + string(b) + ");"
 }
 
+// consoleSource is the script of the pages whose console Go listens to,
+// which only apps that call Page.OnConsoleMessage link.
+//
+//go:embed console.js
+var consoleSource string
+
+// ConsoleConfig is passed to the console script as __MYGO_CONSOLE__.
+type ConsoleConfig struct {
+	// Secret prefixes every message the script posts, as Config's.
+	Secret string `json:"secret"`
+	// Max is the size of the largest message the script posts, in bytes
+	// of UTF-8, the secret left out: the script cuts the text, the stack
+	// and the URL to fit.
+	Max int `json:"max"`
+}
+
+// ConsoleScript returns the console script configured for one window: it
+// wraps the page's console methods and listens for its uncaught errors and
+// unhandled rejections, and posts each as a message
+// {"t":"console","l":level,"v":text,"u":url,"n":line,"c":column,"s":stack}.
+// It runs once per document, wherever it is injected.
+func ConsoleScript(cfg ConsoleConfig) string {
+	b, _ := json.Marshal(cfg)
+	return "(function(__MYGO_CONSOLE__){\n" + consoleSource + "})(" + string(b) + ");"
+}
+
 // TitleBarEvent tells a page of a window with a hidden title bar the room
 // the window controls take. The bridge keeps it in the --mygo-titlebar-*
 // CSS variables.
