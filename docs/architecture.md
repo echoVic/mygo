@@ -1075,6 +1075,24 @@ document start into the main frame. It installs:
   constructed style sheet, which a Content Security Policy allows) and
   scrolls to the active one; engines without the API get the active match
   selected instead. Being JavaScript, it works the same in every engine.
+- The page's console (`Page.OnConsoleMessage`) is a script of its own,
+  `console-script.ts` → `internal/bridge/console.js`, which pages get only
+  while their window has listeners: the first makes `hookConsole` put it
+  in the window's user scripts, after the preferences' and before the
+  preload script (`pageScripts`), and `Eval` it in the page showing, where
+  a symbol on `window` keeps it to once per document; the last takes it
+  out of the pages loaded next. It wraps `console.log`, `info`, `warn`,
+  `error`, `debug`, `trace` and `assert`, which still call the console's
+  own, and listens for `error` and `unhandledrejection`. It formats the
+  arguments as the inspectors do (`console-format.ts`), cuts the text, the
+  stack and the URL to share the room of one message (16 KiB, or what an
+  untrusted page's `maxUntrustedMessage` leaves after the secret), and
+  posts `{t:"console", ...}`, which the core decodes while the window is
+  hooked (`consoleHooked`), lone surrogates as U+FFFD. The script and the
+  decoder are reached through what the first `OnConsoleMessage` sets
+  (`linkConsole`), so apps that don't listen link neither, unless they
+  call `Bind`, which keeps every exported method of `*Page`. The same in
+  every engine; WKWebView has no API for them.
 
 The transport is `window.webkit.messageHandlers.mygo.postMessage` on both
 WebKit platforms and `window.chrome.webview.postMessage` on WebView2.
@@ -1139,6 +1157,7 @@ Trust):
 | `{"t":"content-size","w":W,"h":H,"sw":SW,"sh":SH}` | the size of the content of a window that fits it, and the room of its scrollbars, in CSS pixels |
 | `{"t":"drag"}` / `{"t":"dblclick"}` | mousedown / double click on a drag region |
 | `{"t":"context-menu","x":X,"y":Y,"l":link,"lt":text,"i":image,"m":media,"s":selection,"e":true}` | the page's `contextmenu` event, not cancelled, at X, Y in CSS pixels: what it opens on, empty parts left out (kept only while `OnContextMenu` has a listener) |
+| `{"t":"console","l":level,"v":text,"u":url,"n":line,"c":column,"s":stack}` | the page logged with its console (`l` is `log`, `info`, `warn`, `error` or `debug`), or did not catch an error, empty parts left out (from the console script, which pages run only while `OnConsoleMessage` has a listener) |
 
 Go → page, batched into one `__mygo.receive([...])` evaluation per
 main-loop turn. JavaScriptCore runs a script of that shape, `a.b(JSON)`,
@@ -6680,6 +6699,7 @@ which npm allows only for packages that exist: the first release uses an
 | content rules | the default `WKContentRuleListStore`, which keeps compiled lists under an identifier of the id and a hash of the rules (looked up first, the id's others removed), on each window's `WKUserContentController`; the store's reason for a failure is in `NSHelpAnchorErrorKey` | a `WebKitUserContentFilterStore` in `content-rules` of the user data directory (2.24+), on each window's `WebKitUserContentManager` | matched in Go (`internal/contentrules`, indexed by the domains of `url-filter`s and four bytes of their literals) from `WebResourceRequested` with a `*` filter, blocked pages answered with an empty 403 and other blocked requests with a redirect to `data:`, which Chromium fails as a network error; WebSocket handshakes never reach it; `css-display-none` rules as a style sheet a document-creation script adopts, kept when the page sets `adoptedStyleSheets`; parsed on a goroutine, nothing kept |
 | `FitContent` | the bridge, as elsewhere; WebKit's private `_setSizeToContentAutoSizeMaximumSize:` is not used; native UI measures itself (`ui/fit.go`) | the bridge; native UI measures itself | the bridge; native UI measures itself |
 | `Page.ThemeColor` | the bridge, as elsewhere; WKWebView's `themeColor` (macOS 12+) is not used | the bridge | the bridge |
+| `Page.OnConsoleMessage` | the console script (`internal/bridge/console.js`), as elsewhere | the console script | the console script; the DevTools protocol's `Runtime.consoleAPICalled` and `Runtime.exceptionThrown` are not used |
 | `Page.ProcessID` | the web content process, `-[WKWebView _webProcessIdentifier]` (private, looked up with `respondsToSelector:`) | 0: WebKitGTK has no API for it | the browser process the app's web views share, `ICoreWebView2::get_BrowserProcessId` |
 | `Page.GPUProcessID` | WebKit's GPU process, which plays the page's sound, `-[WKWebView _gpuProcessIdentifier]` (private, looked up with `respondsToSelector:`); 0 until WebKit starts it | 0: WebKitGTK has no API for it | the GPU process of the environment, the `COREWEBVIEW2_PROCESS_KIND_GPU` entry of `ICoreWebView2Environment8`'s `GetProcessInfos`, queried for each call; 0 on runtimes without it |
 | a page's sound (`IsAudible`, `SetAudioMuted`) | private `-[WKWebView _isPlayingAudio]`, key-value observed, and `_mediaMutedState` / `_setPageMuted:` with the `_WKMediaAudioMuted` bit, the capture bits kept; looked up with `respondsToSelector:`, not audible and not muted where WebKit doesn't answer | `webkit_web_view_is_playing_audio` and `notify::is-playing-audio`; `webkit_web_view_set_is_muted` / `get_is_muted` (2.30+, bound when present) | `ICoreWebView2_8`'s `IsDocumentPlayingAudio`, `IsDocumentPlayingAudioChanged` and `IsMuted`, queried for each call; a mute set before the web view is made is put in `setUp`, before its first navigation |

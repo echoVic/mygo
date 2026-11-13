@@ -400,7 +400,7 @@ win.Page().SetWindowOpenHandler(func(req mygo.WindowOpenRequest) *mygo.WindowOpt
 
 ## 网页检查器
 
-开发构建带有网页检查器：右键单击页面并选择“检查元素”（Windows 上为“检查”），或调用 `win.Page().OpenDevTools()`。生产构建没有，除非用 `mygo build -debug` 构建，或窗口的页面在 `WindowOptions.Page` 中设置 `DevTools: mygo.DevToolsEnabled`。
+开发构建带有网页检查器：右键单击页面并选择“检查元素”（Windows 上为“检查”），或调用 `win.Page().OpenDevTools()`。生产构建没有，除非用 `mygo build -debug` 构建，或窗口的页面在 `WindowOptions.Page` 中设置 `DevTools: mygo.DevToolsEnabled`。在任何构建中，[`Page.OnConsoleMessage`](windows.md#页面的控制台) 都能接收页面用控制台输出的内容和页面未捕获的错误。
 
 在 Windows 上，应用会像其他 WebView2 应用一样读取 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` 和 `WEBVIEW2_USER_DATA_FOLDER`。使用 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222` 时，另一个进程可以通过 DevTools 协议驱动它的页面，如同测试运行器、Playwright 的 `connectOverCDP` 或智能体所做的那样。这在每个构建中都有效，与 Microsoft 的加载器一样：启动应用的人设置它的环境。
 

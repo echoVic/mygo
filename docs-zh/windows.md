@@ -540,6 +540,7 @@ mygo.NewWindow(mygo.WindowOptions{
 | `OnRenderProcessGone(func(reason string))` | Web 内容进程崩溃或被杀死；`Reload` 可恢复 |
 | `OnAudibleChanged(func(audible bool))` | 页面开始或停止[发出声音](#声音) |
 | `OnCaptureStateChanged(func(kind mygo.CaptureKind, s mygo.CaptureState))` | 页面开始或停止[捕获](#摄像头和麦克风)摄像头、麦克风或显示器，或捕获被静音或取消静音 |
+| `OnConsoleMessage(func(m mygo.ConsoleMessage))` | 页面用控制台[输出了消息](#页面的控制台)，或有错误未被捕获 |
 
 让窗口停留在应用自己的页面上，并在浏览器中打开其他链接：
 
@@ -877,6 +878,29 @@ macOS 和 Linux（WebKitGTK 2.24 或更新版本）用 WebKit 的内容拦截器
 - 弹出窗口（`resource-type` 为 `popup`）不会被匹配。
 - `block-cookies` 移除请求的 cookie，而不是响应的 cookie。
 - 自身 `style` 写着 `display: ... !important` 的元素会保留：样式表是页面的，而 WebKit 的是用户的，后者获胜。
+
+### 页面的控制台
+
+`OnConsoleMessage` 接收页面用控制台输出的内容和页面未捕获的错误，这些原本只有网页检查器能看到。生产构建的检查器是关闭的，有了它，在自测、CI、驱动应用的智能体或用户的问题报告中，也能看到页面做了什么：
+
+```go
+win.Page().OnConsoleMessage(func(m mygo.ConsoleMessage) {
+	log.Printf("[%s] %s (%s:%d)", m.Level, m.Text, m.URL, m.Line)
+})
+```
+
+| 字段 | |
+|---|---|
+| `Level` | `ConsoleLog`、`ConsoleInfo`、`ConsoleWarn`、`ConsoleError` 或 `ConsoleDebug`，即控制台方法的级别：`console.trace` 属于 `ConsoleLog`，失败的 `console.assert`、未捕获的错误和没有处理器的 promise 拒绝都属于 `ConsoleError` |
+| `Text` | 消息，与检查器显示的一样：各参数以空格分隔，先替换第一个字符串中的占位符（`%s`、`%d`、`%i`、`%f`、`%o`、`%O`，以及不显示样式的 `%c`），其他值显示为预览，如 `{id: 1, tags: ["a"]}`；预览不读取 getter，最多深入三层。未捕获的错误是 `Uncaught TypeError: x is null`，拒绝是 `Uncaught (in promise)` 加上原因，失败的断言是 `Assertion failed: ` 加上其消息 |
+| `URL`、`Line`、`Column` | 输出消息或抛出错误的代码所在的位置：脚本的 URL，文档内的脚本则是文档的 URL，行号和列号从 1 开始；引擎没有给出时为空和 0，例如 `Page.Eval` 运行的代码 |
+| `Stack` | 未捕获的错误、原因是 `Error` 的拒绝以及 `console.trace` 的调用栈，每行一帧，保持引擎的写法；其他消息为空 |
+
+消息会被截断以容纳在 16 KiB 内，文本以“…”结尾；在[不受信任的页面](frontend.md#不受信任的页面)中是 4 KiB。这样即使页面在循环中输出对象，开销也很小。监听器在主线程上按页面输出的顺序调用，所以不能阻塞。
+
+只有存在监听器时，页面才为此付出开销。第一个监听器会让窗口的页面在文档开始时运行 MyGo 的一个脚本，它位于 MyGo 的运行时之后、`PreloadScript` 之前，并立即在当前显示的页面中运行；最后一个监听器移除后，之后加载的页面不再运行它。该脚本包装控制台的方法，这些方法仍会输出到检查器，只是检查器会把 MyGo 的脚本显示为调用位置；它还监听窗口的 `error` 和 `unhandledrejection` 事件：页面自己的监听器调用 `preventDefault()`，只会对检查器隐藏错误，不会对 Go 隐藏。它在 macOS、Linux 和 Windows 上的表现相同，适用于任何来源的页面。
+
+它只接收页面自己的文档，不包括其 iframe 和 worker，也只接收经过控制台方法的内容：引擎自己输出的内容，例如加载失败的资源或违反页面内容安全策略（Content Security Policy）的行为，只会出现在检查器中。在 macOS 上，用 `Page.Eval` 运行不是表达式的代码（如 `a(); b()`）时，MyGo 会先把它当作表达式尝试，这会让 WebKit 以 `Script error.` 触发页面的 `error` 事件，监听器收到的是 `Uncaught Script error.`。
 
 ### Web 检查器
 

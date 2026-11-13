@@ -604,7 +604,9 @@ iframes: to tell the page what an iframe found, post it to `window.top`.
 Development builds have the web inspector: right-click a page and choose
 Inspect Element (Inspect on Windows), or call `win.Page().OpenDevTools()`.
 Production builds do not, unless built with `mygo build -debug` or a window's
-page sets `DevTools: mygo.DevToolsEnabled` in `WindowOptions.Page`.
+page sets `DevTools: mygo.DevToolsEnabled` in `WindowOptions.Page`. In every
+build, [`Page.OnConsoleMessage`](windows.md#the-pages-console) hears what a
+page logs with its console and the errors it does not catch.
 
 On Windows, an app takes `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` and
 `WEBVIEW2_USER_DATA_FOLDER` as other WebView2 apps do. With

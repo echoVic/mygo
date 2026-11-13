@@ -833,6 +833,7 @@ Page events, on `win.Page()`:
 | `OnRenderProcessGone(func(reason string))` | the web content process crashed or was killed; `Reload` recovers |
 | `OnAudibleChanged(func(audible bool))` | the page started or stopped [making sound](#sound) |
 | `OnCaptureStateChanged(func(kind mygo.CaptureKind, s mygo.CaptureState))` | the page started or stopped [capturing](#camera-and-microphone) the camera, the microphone or the display, or the capture was muted or unmuted |
+| `OnConsoleMessage(func(m mygo.ConsoleMessage))` | the page [logged](#the-pages-console) with its console, or did not catch an error |
 
 Keep a window on the app's own pages and open other links in the browser:
 
@@ -1328,6 +1329,51 @@ adopts. There:
   response.
 - An element whose own `style` says `display: ... !important` stays: the
   style sheet is the page's, where WebKit's is the user's, which wins.
+
+### The page's console
+
+`OnConsoleMessage` hears what the page logs with its console and the
+errors it does not catch, which otherwise only the web inspector shows:
+to see what the pages of a production build do, whose inspector is off, in
+a self-test, in CI, for an agent driving the app or in a user's bug
+report:
+
+```go
+win.Page().OnConsoleMessage(func(m mygo.ConsoleMessage) {
+	log.Printf("[%s] %s (%s:%d)", m.Level, m.Text, m.URL, m.Line)
+})
+```
+
+| Field | |
+|---|---|
+| `Level` | `ConsoleLog`, `ConsoleInfo`, `ConsoleWarn`, `ConsoleError` or `ConsoleDebug`, the console method's: `console.trace` logs, and a failed `console.assert`, an uncaught error and a promise rejected with no handler are errors |
+| `Text` | the message, as the inspector shows it: the arguments separated by spaces, after the substitutions of a first string (`%s`, `%d`, `%i`, `%f`, `%o`, `%O`, and `%c`, whose styles show nothing), with previews of other values, as `{id: 1, tags: ["a"]}`, which read no getter and go three levels deep. An uncaught error is `Uncaught TypeError: x is null`, a rejection `Uncaught (in promise)` and its reason, and a failed assertion `Assertion failed: ` and its message |
+| `URL`, `Line`, `Column` | where the code that logged or threw is: the script's URL, or the document's for a script in it, with the line and column from 1; empty and 0 where the engine tells none, as for code that `Page.Eval` runs |
+| `Stack` | the stack of an uncaught error, of a rejection whose reason is an `Error` and of `console.trace`, one frame per line, as the engine writes them; empty for the other messages |
+
+A message is cut, its text ending with "…", to fit in 16 KiB, and in 4 KiB in
+an [untrusted page](frontend.md#untrusted-pages), so that an object logged
+in a loop costs little. Listeners run on the main thread, in the order the
+page logged, so they must not block.
+
+Pages pay for it only while there are listeners. The first one makes the
+window's pages run a script of MyGo's at document start, after MyGo's
+runtime and before `PreloadScript`, and runs it in the page showing at
+once; once the last one goes, the pages loaded next run it no more. The
+script wraps the console's methods, which still log to the inspector,
+though the inspector then shows MyGo's script as where they were called,
+and listens for the window's `error` and `unhandledrejection` events: a
+page whose own listener calls `preventDefault()` hides the error from the
+inspector, not from Go. It works the same on macOS, Linux and Windows, in
+pages of any origin.
+
+It hears the page's own document, not its iframes or its workers, and only
+what goes through the console's methods: what the engine logs itself, as a
+resource that failed to load or a violation of the page's Content Security
+Policy, goes to the inspector alone. On macOS, `Page.Eval` of code that is
+not an expression, such as `a(); b()`, which MyGo tries as one first, makes
+WebKit fire the page's `error` event with `Script error.`, which a listener
+hears as `Uncaught Script error.`.
 
 ### The web inspector
 
