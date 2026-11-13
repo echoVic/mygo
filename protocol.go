@@ -215,6 +215,48 @@ func appOrigin(origin string) string {
 
 func isAppScheme(scheme string) bool { return scheme == frontendScheme || Protocol.IsHandled(scheme) }
 
+// appURL maps a URL WebView2 gives a page of a custom scheme back to that
+// scheme's, as the Windows backend does for Page.URL.
+func appURL(raw string) string {
+	if !schemeHosts {
+		return raw
+	}
+	return schemehost.AppURL(raw, isAppScheme)
+}
+
+// appURLs maps the URLs of text, a stack, that WebView2 gives scripts of
+// custom schemes back to those schemes' (appURL), leaving the rest as it
+// is. A URL ends at a space or a parenthesis, as in V8's frames ("at f
+// (http://app.localhost/main.js:3:7)"), and only its scheme and host
+// change, so the end matters only after the host.
+func appURLs(text string) string {
+	if !schemeHosts || !strings.Contains(text, "http://") {
+		return text
+	}
+	var b strings.Builder
+	for {
+		i := strings.Index(text, "http://")
+		if i < 0 {
+			break
+		}
+		b.WriteString(text[:i])
+		rest := text[i+len("http://"):]
+		end := strings.IndexAny(rest, "/?# \t\r\n()")
+		if end < 0 {
+			end = len(rest)
+		}
+		host := rest[:end]
+		if scheme, h, ok := schemehost.AppHost(host, isAppScheme); ok && !strings.ContainsAny(host, ":@") {
+			b.WriteString(scheme + "://" + h)
+		} else {
+			b.WriteString("http://" + host)
+		}
+		text = rest[end:]
+	}
+	b.WriteString(text)
+	return b.String()
+}
+
 // schemeWriter is the http.ResponseWriter for custom scheme requests. Body
 // bytes are buffered and handed to the main thread in chunks, or written
 // to backends that take them on this goroutine.

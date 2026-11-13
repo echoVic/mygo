@@ -1348,8 +1348,8 @@ win.Page().OnConsoleMessage(func(m mygo.ConsoleMessage) {
 |---|---|
 | `Level` | `ConsoleLog`, `ConsoleInfo`, `ConsoleWarn`, `ConsoleError` or `ConsoleDebug`, the console method's: `console.trace` logs, and a failed `console.assert`, an uncaught error and a promise rejected with no handler are errors |
 | `Text` | the message, as the inspector shows it: the arguments separated by spaces, after the substitutions of a first string (`%s`, `%d`, `%i`, `%f`, `%o`, `%O`, and `%c`, whose styles show nothing), with previews of other values, as `{id: 1, tags: ["a"]}`, which read no getter and go three levels deep. An uncaught error is `Uncaught TypeError: x is null`, a rejection `Uncaught (in promise)` and its reason, and a failed assertion `Assertion failed: ` and its message |
-| `URL`, `Line`, `Column` | where the code that logged or threw is: the script's URL, or the document's for a script in it, with the line and column from 1; empty and 0 where the engine tells none, as for code that `Page.Eval` runs |
-| `Stack` | the stack of an uncaught error, of a rejection whose reason is an `Error` and of `console.trace`, one frame per line, as the engine writes them; empty for the other messages |
+| `URL`, `Line`, `Column` | where the code that logged or threw is: the script's URL, or the document's for a script in it, with the line and column from 1; empty and 0 where the engine tells none, as for code that `Page.Eval` runs. On Windows, too, the URLs of the app's schemes are `app://localhost/…`, as `Page.URL` gives them, though WebView2 serves them at `http://app.localhost/…` |
+| `Stack` | the stack of an uncaught error, of a rejection whose reason is an `Error` and of `console.trace`, one frame per line, as the engine writes them but with the app's URLs as in `URL`; empty for the other messages |
 
 A message is cut, its text ending with "…", to fit in 16 KiB, and in 4 KiB in
 an [untrusted page](frontend.md#untrusted-pages), so that an object logged

@@ -4,6 +4,7 @@ package mygo
 
 import (
 	"encoding/json/v2"
+	"net/http"
 	"regexp"
 	"slices"
 	"strings"
@@ -203,5 +204,68 @@ func TestPageConsoleMessageClosed(t *testing.T) {
 	off()
 	if n := userScriptUpdates(fw) - updates; n != 0 || consoleScripts(t, fw) != nil {
 		t.Errorf("a closed window's page set the user scripts %d times, and has the console script at %v", n, consoleScripts(t, fw))
+	}
+}
+
+// On Windows, WebView2 serves the app's schemes at http://*.localhost: a
+// message names the app's URLs, as Page.URL does, in its place and its
+// stack, and keeps its text as the page wrote it.
+func TestPageConsoleMessageSchemeHosts(t *testing.T) {
+	if err := Protocol.Handle("assets", http.NotFoundHandler()); err != nil {
+		t.Fatal(err)
+	}
+	defer Protocol.Unhandle("assets")
+	defer func(v bool) { schemeHosts = v }(schemeHosts)
+	schemeHosts = true // as on Windows
+	w, fw := readyWindow(t, WindowOptions{Hidden: true})
+	var got []ConsoleMessage // appended on the main thread
+	defer w.Page().OnConsoleMessage(func(m ConsoleMessage) { got = append(got, m) })()
+	stack := strings.Join([]string{
+		"at f (http://mygo.localhost/a.js:3:7)",
+		"at http://abc.assets.localhost/b(1).js?v=2:1:2",
+		"at async g (http://mygo.localhost/)",
+		"at h (http://evil.localhost/c.js:1:1)",        // not a scheme of the app
+		"at i (http://assets.localhost:8080/d.js:1:1)", // a port: a server
+		"at j (http://user@assets.localhost/e.js:1:1)", // user info: not the app's
+		"at eval (eval at k (http://mygo.localhost/f.js:1:2), <anonymous>:1:1)",
+	}, "\n")
+	msg, _ := json.Marshal(struct {
+		T string `json:"t"`
+		L string `json:"l"`
+		V string `json:"v"`
+		U string `json:"u"`
+		N int    `json:"n"`
+		C int    `json:"c"`
+		S string `json:"s"`
+	}{"console", "error", "Uncaught Error: no http://mygo.localhost/x", "http://abc.assets.localhost/b(1).js?v=2", 3, 7, stack})
+	page(fw, string(msg))
+	want := ConsoleMessage{
+		Level:  ConsoleError,
+		Text:   "Uncaught Error: no http://mygo.localhost/x",
+		URL:    "assets://abc/b(1).js?v=2",
+		Line:   3,
+		Column: 7,
+		Stack: strings.Join([]string{
+			"at f (mygo://localhost/a.js:3:7)",
+			"at assets://abc/b(1).js?v=2:1:2",
+			"at async g (mygo://localhost/)",
+			"at h (http://evil.localhost/c.js:1:1)",
+			"at i (http://assets.localhost:8080/d.js:1:1)",
+			"at j (http://user@assets.localhost/e.js:1:1)",
+			"at eval (eval at k (mygo://localhost/f.js:1:2), <anonymous>:1:1)",
+		}, "\n"),
+	}
+	// Elsewhere, such a URL is a server on the loopback interface.
+	onMain(func() { schemeHosts = false })
+	page(fw, string(msg))
+	heard := onMainValue(func() []ConsoleMessage { return slices.Clone(got) })
+	if len(heard) != 2 {
+		t.Fatalf("heard %+v", heard)
+	}
+	if heard[0] != want {
+		t.Errorf("heard %+v,\nwant %+v", heard[0], want)
+	}
+	if heard[1].URL != "http://abc.assets.localhost/b(1).js?v=2" || heard[1].Stack != stack {
+		t.Errorf("outside Windows, heard %+v", heard[1])
 	}
 }

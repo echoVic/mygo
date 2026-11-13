@@ -437,7 +437,9 @@ func consoleMessageOf(w *Window, msg string) {
 	default:
 		level = ConsoleLog
 	}
-	fire1(&w.onConsoleMessage, ConsoleMessage{Level: level, Text: m.V, URL: m.U, Line: m.N, Column: m.C, Stack: m.S})
+	// The URLs WebView2 gives the app's schemes, as Page.URL names them;
+	// the text is the page's own.
+	fire1(&w.onConsoleMessage, ConsoleMessage{Level: level, Text: m.V, URL: appURL(m.U), Line: m.N, Column: m.C, Stack: appURLs(m.S)})
 }
 
 // findScript returns the script with which FindInPage asks the bridge.

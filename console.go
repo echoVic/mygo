@@ -35,7 +35,10 @@ type ConsoleMessage struct {
 	// URL, Line and Column tell where the code that logged or threw is,
 	// as the engine tells it: the script's URL, or the document's for a
 	// script in it, with the line and column from 1. They are "" and 0
-	// where the engine tells none, as for code that Page.Eval runs.
+	// where the engine tells none, as for code that Page.Eval runs. The
+	// URL and the stack's name the app's schemes as Page.URL does, though
+	// WebView2 serves app://localhost/ at http://app.localhost/; Text is
+	// as the page wrote it.
 	URL    string
 	Line   int
 	Column int

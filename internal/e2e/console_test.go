@@ -116,7 +116,10 @@ func TestPageConsoleMessage(t *testing.T) {
 	check(heard.find(t, "Assertion failed: math is broken"), mygo.ConsoleError, script, 8)
 	m = heard.find(t, "traced")
 	check(m, mygo.ConsoleLog, script, 9)
-	if !strings.Contains(m.Stack, "main.js:9") {
+	// Stacks name the app's URLs, as Page.URL does, though WebView2 serves
+	// them at http://app.localhost; frames end with the line and column
+	// in WebKit ("f@url:9:9") and in V8 ("at f (url:9:9)").
+	if !strings.Contains(m.Stack, script+":9:") {
 		t.Errorf("console.trace's stack %q", m.Stack)
 	}
 	m = heard.find(t, "xxx")
@@ -126,12 +129,12 @@ func TestPageConsoleMessage(t *testing.T) {
 	check(heard.find(t, "inline 2"), mygo.ConsoleInfo, page, 4)
 	m = heard.find(t, "Uncaught RangeError: too far")
 	check(m, mygo.ConsoleError, script, 12)
-	if !strings.Contains(m.Stack, "thrower") {
+	if !strings.Contains(m.Stack, "thrower") || !strings.Contains(m.Stack, script+":12:") {
 		t.Errorf("an uncaught error's stack %q", m.Stack)
 	}
 	m = heard.find(t, "Uncaught (in promise) Error: nobody waits")
 	check(m, mygo.ConsoleError, script, 14)
-	if !strings.Contains(m.Stack, "main.js:14") {
+	if !strings.Contains(m.Stack, script+":14:") {
 		t.Errorf("a rejection's stack %q", m.Stack)
 	}
 	if v := mustEval(t, w, "console.log.toString().includes('[native code]')"); v != false {
@@ -182,7 +185,6 @@ func TestPageConsoleMessage(t *testing.T) {
 	defer p.OnConsoleMessage(late.add)()
 	mustEval(t, w, "console.warn('late')")
 	m = late.find(t, "late")
-	t.Logf("a message of Eval's code: %+v", m)
 	if m.Level != mygo.ConsoleWarn {
 		t.Errorf("a message of the page showing: %+v", m)
 	}

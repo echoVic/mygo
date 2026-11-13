@@ -893,8 +893,8 @@ win.Page().OnConsoleMessage(func(m mygo.ConsoleMessage) {
 |---|---|
 | `Level` | `ConsoleLog`、`ConsoleInfo`、`ConsoleWarn`、`ConsoleError` 或 `ConsoleDebug`，即控制台方法的级别：`console.trace` 属于 `ConsoleLog`，失败的 `console.assert`、未捕获的错误和没有处理器的 promise 拒绝都属于 `ConsoleError` |
 | `Text` | 消息，与检查器显示的一样：各参数以空格分隔，先替换第一个字符串中的占位符（`%s`、`%d`、`%i`、`%f`、`%o`、`%O`，以及不显示样式的 `%c`），其他值显示为预览，如 `{id: 1, tags: ["a"]}`；预览不读取 getter，最多深入三层。未捕获的错误是 `Uncaught TypeError: x is null`，拒绝是 `Uncaught (in promise)` 加上原因，失败的断言是 `Assertion failed: ` 加上其消息 |
-| `URL`、`Line`、`Column` | 输出消息或抛出错误的代码所在的位置：脚本的 URL，文档内的脚本则是文档的 URL，行号和列号从 1 开始；引擎没有给出时为空和 0，例如 `Page.Eval` 运行的代码 |
-| `Stack` | 未捕获的错误、原因是 `Error` 的拒绝以及 `console.trace` 的调用栈，每行一帧，保持引擎的写法；其他消息为空 |
+| `URL`、`Line`、`Column` | 输出消息或抛出错误的代码所在的位置：脚本的 URL，文档内的脚本则是文档的 URL，行号和列号从 1 开始；引擎没有给出时为空和 0，例如 `Page.Eval` 运行的代码。在 Windows 上，应用协议的 URL 同样是 `app://localhost/…`，与 `Page.URL` 给出的一致，尽管 WebView2 在 `http://app.localhost/…` 提供它们 |
+| `Stack` | 未捕获的错误、原因是 `Error` 的拒绝以及 `console.trace` 的调用栈，每行一帧，保持引擎的写法，但其中应用的 URL 与 `URL` 中的一样；其他消息为空 |
 
 消息会被截断以容纳在 16 KiB 内，文本以“…”结尾；在[不受信任的页面](frontend.md#不受信任的页面)中是 4 KiB。这样即使页面在循环中输出对象，开销也很小。监听器在主线程上按页面输出的顺序调用，所以不能阻塞。
 
