@@ -3,7 +3,7 @@
 // listeners, and runs in the page that shows as the first listener comes
 // (console.ts). The Go side wraps the bundle in a function that defines
 // __MYGO_CONSOLE__.
-import { hookConsole } from "./console";
+import { type Hook, hookConsole } from "./console";
 import { transport } from "./transport";
 
 declare const __MYGO_CONSOLE__: {
@@ -16,12 +16,16 @@ declare const __MYGO_CONSOLE__: {
 (() => {
   const w = window as any;
   // Once per document: the page showing as the first listener comes may
-  // have run the script at its start already.
+  // have run the script at its start already, or a listener before, whose
+  // going muted the hook (internal/bridge's ConsoleMuteScript).
   const installed = Symbol.for("mygo.console");
-  if (w[installed]) return;
+  const hook: Hook | undefined = w[installed];
+  if (hook) {
+    hook.muted = false;
+    return;
+  }
   const raw = transport(w);
   if (!raw) return;
-  Object.defineProperty(w, installed, { value: true });
   const { secret, max } = __MYGO_CONSOLE__;
-  hookConsole(w, (m) => raw.post(secret + m), max);
+  Object.defineProperty(w, installed, { value: hookConsole(w, (m) => raw.post(secret + m), max) });
 })();

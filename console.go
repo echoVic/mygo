@@ -68,7 +68,9 @@ const maxConsoleMessage = 16 << 10
 // listener: the first makes the window's pages run a script of MyGo's at
 // document start, after MyGo's runtime and before
 // PageOptions.PreloadScript, and the page showing at once, from then on;
-// once the last listener goes, the pages loaded next run it no more. The
+// once the last listener goes, the pages loaded next run it no more, and
+// the page showing keeps its wrappers, which a wrapper of the page's own
+// may call, but they format and tell nothing until a listener comes. The
 // script wraps the console's methods, which still do what they do, though
 // the web inspector then shows MyGo's script as where they were called,
 // and listens for the window's error and unhandledrejection events: a page
@@ -114,7 +116,11 @@ func (w *Window) hookConsole() {
 	w.consoleHooked = on
 	w.userScripts = w.pageScripts()
 	w.native.SetUserScripts(w.userScripts)
+	// The page showing keeps its hook, which a wrapper of its own may
+	// call: muted, and unmuted by the script running again.
 	if on {
 		w.native.Eval(consoleScript(w))
+	} else {
+		w.native.Eval(consoleMuteScript)
 	}
 }

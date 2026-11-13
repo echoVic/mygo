@@ -397,6 +397,10 @@ func (w *Window) handleMessage(msg string) {
 	}
 }
 
+// consoleMuteScript mutes the console script's hook in the page showing
+// as the last OnConsoleMessage listener goes.
+const consoleMuteScript = bridge.ConsoleMuteScript
+
 // linkConsole links what the page's console takes (OnConsoleMessage):
 // its script, and the decoding of its messages.
 func linkConsole() {

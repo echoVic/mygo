@@ -29,6 +29,15 @@ export interface Scope {
   addEventListener(type: "error" | "unhandledrejection", listener: (e: any) => void): void;
 }
 
+/**
+ * The hook of a page, which stays when Go stops listening: muted, it tells
+ * Go nothing and formats nothing, and its wrappers only call the console's
+ * methods, so that a wrapper the page put over them since keeps working.
+ */
+export interface Hook {
+  muted: boolean;
+}
+
 /** The console's methods the hook tells of, and their levels. */
 const METHODS: Record<string, ConsoleLevel> = {
   log: "log",
@@ -43,13 +52,14 @@ const METHODS: Record<string, ConsoleLevel> = {
 /**
  * Wraps the console's methods of scope and listens for its uncaught errors
  * and rejections, posting each as a ConsoleMessage of at most max bytes of
- * UTF-8. A console call made while one is told (a toString that logs)
- * reaches the console alone.
+ * UTF-8 until the hook it returns is muted. A console call made while one
+ * is told (a toString that logs) reaches the console alone.
  */
-export function hookConsole(scope: Scope, post: (message: string) => void, max: number): void {
+export function hookConsole(scope: Scope, post: (message: string) => void, max: number): Hook {
+  const hook: Hook = { muted: false };
   let busy = false;
   const tell = (make: () => ConsoleMessage | null) => {
-    if (busy) return;
+    if (busy || hook.muted) return;
     busy = true;
     try {
       const m = make();
@@ -66,9 +76,11 @@ export function hookConsole(scope: Scope, post: (message: string) => void, max: 
     const original = target[name];
     if (typeof original !== "function") continue;
     const wrapper = function (this: unknown, ...args: unknown[]) {
-      // Made here, so that the frame after this one is the caller's.
-      const stack = new Error().stack;
-      tell(() => call(name, level, args, stack, max));
+      if (!hook.muted && !busy) {
+        // Made here, so that the frame after this one is the caller's.
+        const stack = new Error().stack;
+        tell(() => call(name, level, args, stack, max));
+      }
       return original.apply(this, args);
     };
     // Named as the method it wraps, as the console's own are.
@@ -77,6 +89,7 @@ export function hookConsole(scope: Scope, post: (message: string) => void, max: 
   }
   scope.addEventListener("error", (e) => tell(() => uncaught(e, max)));
   scope.addEventListener("unhandledrejection", (e) => tell(() => rejection(e, max)));
+  return hook;
 }
 
 /** The message of a console call; stack is the wrapper's. */

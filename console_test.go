@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/egoist/mygo/internal/bridge"
 	"github.com/egoist/mygo/internal/fake"
 )
 
@@ -137,10 +138,15 @@ func TestPageConsoleMessage(t *testing.T) {
 		t.Errorf("the second listener heard %q", second)
 	}
 
-	// The last one going takes the script out of the pages loaded next.
+	// The last one going takes the script out of the pages loaded next,
+	// and mutes the hook of the page showing, whose wrappers stay.
+	fw.ClearScripts()
 	off2()
 	if at := consoleScripts(t, fw); at != nil || len(fw.UserScripts()) != 3 {
 		t.Errorf("after the last listener went, the console script is at %v of %d scripts", at, len(fw.UserScripts()))
+	}
+	if ran := fw.Scripts(); !slices.Equal(ran, []string{bridge.ConsoleMuteScript}) {
+		t.Errorf("the last listener going ran %q in the page showing, want the mute script", ran)
 	}
 	page(fw, `{"t":"console","l":"log","v":"nobody again"}`)
 	if !slices.Equal(second, []string{"both", "one left"}) {

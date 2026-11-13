@@ -1359,12 +1359,14 @@ page logged, so they must not block.
 Pages pay for it only while there are listeners. The first one makes the
 window's pages run a script of MyGo's at document start, after MyGo's
 runtime and before `PreloadScript`, and runs it in the page showing at
-once; once the last one goes, the pages loaded next run it no more. The
-script wraps the console's methods, which still log to the inspector,
-though the inspector then shows MyGo's script as where they were called,
-and listens for the window's `error` and `unhandledrejection` events: a
-page whose own listener calls `preventDefault()` hides the error from the
-inspector, not from Go. It works the same on macOS, Linux and Windows, in
+once; once the last one goes, the pages loaded next run it no more, and
+the page showing keeps its wrappers, which a wrapper of the page's own (an
+error reporter's) may call, but they format and tell nothing until a
+listener comes. The script wraps the console's methods, which still log to
+the inspector, though the inspector then shows MyGo's script as where they
+were called, and listens for the window's `error` and `unhandledrejection`
+events: a page whose own listener calls `preventDefault()` hides the error
+from the inspector, not from Go. It works the same on macOS, Linux and Windows, in
 pages of any origin.
 
 It hears the page's own document, not its iframes or its workers, and only

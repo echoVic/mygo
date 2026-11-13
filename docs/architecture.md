@@ -1081,9 +1081,14 @@ document start into the main frame. It installs:
   in the window's user scripts, after the preferences' and before the
   preload script (`pageScripts`), and `Eval` it in the page showing, where
   a symbol on `window` keeps it to once per document; the last takes it
-  out of the pages loaded next. It wraps `console.log`, `info`, `warn`,
-  `error`, `debug`, `trace` and `assert`, which still call the console's
-  own, and listens for `error` and `unhandledrejection`. It formats the
+  out of the pages loaded next and `Eval`s `bridge.ConsoleMuteScript` in
+  the page showing, which mutes its hook (the symbol's value) rather than
+  restoring the console, whose methods a page's own wrapper may hold: muted,
+  the wrappers only call the console's own, and the script running again
+  unmutes it. It wraps `console.log`, `info`, `warn`, `error`, `debug`,
+  `trace` and `assert`, named as they are and called with their caller's
+  `this`, which still call the console's own, and listens for `error` and
+  `unhandledrejection`. It formats the
   arguments as the inspectors do (`console-format.ts`), cuts the text, the
   stack and the URL to share the room of one message (16 KiB, or what an
   untrusted page's `maxUntrustedMessage` leaves after the secret), and

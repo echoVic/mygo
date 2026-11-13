@@ -31,6 +31,8 @@ func (w *Window) handleMessage(msg string) {}
 
 func linkConsole() {}
 
+const consoleMuteScript = ""
+
 func findScript(text string, opts FindOptions) string { return "" }
 
 func preferencesScript() string { return "" }

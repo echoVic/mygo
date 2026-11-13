@@ -140,10 +140,19 @@ func TestPageConsoleMessage(t *testing.T) {
 	if v := mustEval(t, w, "[console.log.name, console.assert.name].join()"); v != "log,assert" {
 		t.Errorf("the console's methods are named %v", v)
 	}
+	// How many times a console.log formats its argument: the hook's
+	// formatting once, and the engine's as often as it does.
+	const formats = `(() => { let n = 0; console.log("%d", { toString() { n++; return "7" } }); return n })()`
+	hooked := mustEval(t, w, formats)
 
 	// A listener that comes as the page showing has the script, from a
-	// listener that went, hears each message once.
+	// listener that went, hears each message once. In between, the hook
+	// stays, muted: it formats nothing.
 	off()
+	if v := mustEval(t, w, "console.log.toString().includes('[native code]')"); v != false {
+		t.Error("the last listener going took the hook out of the page showing")
+	}
+	muted := mustEval(t, w, formats)
 	mustEval(t, w, "console.log('unheard')")
 	var again consoleHeard
 	offAgain := p.OnConsoleMessage(again.add)
@@ -163,6 +172,9 @@ func TestPageConsoleMessage(t *testing.T) {
 	waitFor(t, w, "document.readyState === 'complete' && window.mygo && document.body.textContent === 'after'")
 	if v := mustEval(t, w, "console.log.toString().includes('[native code]')"); v != true {
 		t.Error("a page loaded after the last listener went has the console script")
+	}
+	if native := mustEval(t, w, formats); muted != native || hooked != native.(float64)+1 {
+		t.Errorf("console.log formatted its argument %v times hooked, %v muted and %v without the hook", hooked, muted, native)
 	}
 
 	// A listener that comes hears the page showing.

@@ -57,11 +57,18 @@ type ConsoleConfig struct {
 // wraps the page's console methods and listens for its uncaught errors and
 // unhandled rejections, and posts each as a message
 // {"t":"console","l":level,"v":text,"u":url,"n":line,"c":column,"s":stack}.
-// It runs once per document, wherever it is injected.
+// It hooks a document once, wherever it is injected, and running again
+// unmutes the hook ConsoleMuteScript muted.
 func ConsoleScript(cfg ConsoleConfig) string {
 	b, _ := json.Marshal(cfg)
 	return "(function(__MYGO_CONSOLE__){\n" + consoleSource + "})(" + string(b) + ");"
 }
+
+// ConsoleMuteScript mutes the console script's hook in the page showing:
+// its wrappers stay, so that a page's own wrapper put over them since
+// keeps working, but call the console's methods alone, telling and
+// formatting nothing, until ConsoleScript runs in the page again.
+const ConsoleMuteScript = `(function(h){if(h)h.muted=true})(window[Symbol.for("mygo.console")]);`
 
 // TitleBarEvent tells a page of a window with a hidden title bar the room
 // the window controls take. The bridge keeps it in the --mygo-titlebar-*

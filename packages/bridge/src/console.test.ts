@@ -21,7 +21,7 @@ function setup(max = 4096) {
   };
   const sent: ConsoleMessage[] = [];
   let failing = false;
-  hookConsole(
+  const hook = hookConsole(
     scope,
     (m) => {
       if (failing) throw new Error("torn down");
@@ -30,7 +30,7 @@ function setup(max = 4096) {
     max,
   );
   const fire = (type: string, e: unknown) => listeners[type]?.forEach((fn) => fn(e));
-  return { c: console as Record<string, (...args: unknown[]) => unknown>, calls, sent, fire, fail: () => (failing = true) };
+  return { c: console as Record<string, (...args: unknown[]) => unknown>, calls, sent, fire, hook, fail: () => (failing = true) };
 }
 
 describe("console calls", () => {
@@ -132,6 +132,51 @@ describe("console calls", () => {
     e.stack = "Error: boom\n    at f (https://app.test/a.js:1:2)";
     c.error!("failed:", e);
     expect(sent[0]!.v).toBe("failed: Error: boom\nat f (https://app.test/a.js:1:2)");
+  });
+});
+
+describe("muted", () => {
+  test("tell nothing and format nothing, but still reach the console", () => {
+    const { c, calls, sent, fire, hook } = setup();
+    let formatted = 0;
+    const value = {
+      toString() {
+        formatted++;
+        return "7";
+      },
+    };
+    hook.muted = true;
+    expect(c.log!("%d", value)).toBe("log");
+    c.trace!();
+    c.assert!(false, "%d", value);
+    fire("error", { message: "Uncaught Error: boom", filename: "https://app.test/a.js", lineno: 1, colno: 1, error: new Error("boom") });
+    fire("unhandledrejection", { reason: value });
+    expect(sent).toEqual([]);
+    expect(formatted).toBe(0);
+    expect(calls.map(([name, , args]) => [name, args])).toEqual([
+      ["log", ["%d", value]],
+      ["trace", []],
+      ["assert", [false, "%d", value]],
+    ]);
+
+    // Unmuted, as the script running again does, they tell Go again.
+    hook.muted = false;
+    c.log!("%d", value);
+    expect(sent.map((m) => m.v)).toEqual(["7"]);
+    expect(formatted).toBe(1);
+  });
+
+  test("a wrapper the page put over them keeps working", () => {
+    const { c, calls, sent, hook } = setup();
+    const theirs: unknown[][] = [];
+    const ours = c.warn!;
+    c.warn = function (this: unknown, ...args: unknown[]) {
+      theirs.push(args);
+      return ours.apply(this, args);
+    };
+    hook.muted = true;
+    c.warn!("w");
+    expect([theirs, calls.map(([name, , args]) => [name, args]), sent]).toEqual([[["w"]], [["warn", ["w"]]], []]);
   });
 });
 
