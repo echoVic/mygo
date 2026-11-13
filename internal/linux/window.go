@@ -16,6 +16,7 @@ import (
 
 	"github.com/ebitengine/purego"
 
+	"github.com/egoist/mygo/internal/jsc"
 	"github.com/egoist/mygo/internal/platform"
 )
 
@@ -1257,6 +1258,14 @@ func (w *window) CallAsyncFunction(body string, cb func(string, error)) {
 	})
 	webkitWebViewCallAsyncJavascriptFunction(w.web, unsafe.StringData(body), len(body), 0, nil, nil, 0, cbAsyncReady, id)
 }
+
+// javaScriptCore checks the syntax of what CallAsyncFunction runs with the
+// engine of the loaded WebKitGTK, whose C API libjavascriptcoregtk exports.
+var javaScriptCore = jsc.Syntax{Open: func() (uintptr, error) { return libJSC, nil }}
+
+// CompilesFunction reports whether CallAsyncFunction would compile body
+// (platform.CompileCheckWindow).
+func (w *window) CompilesFunction(body string) bool { return javaScriptCore.CompilesFunction(body) }
 
 // SetZoom zooms the page, a web view's as the content scales it too.
 func (w *window) SetZoom(f float64) { webkitWebViewSetZoomLevel(w.web, f*cmp.Or(w.pageScale, 1)) }

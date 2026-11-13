@@ -1370,10 +1370,7 @@ pages of any origin.
 It hears the page's own document, not its iframes or its workers, and only
 what goes through the console's methods: what the engine logs itself, as a
 resource that failed to load or a violation of the page's Content Security
-Policy, goes to the inspector alone. On macOS, `Page.Eval` of code that is
-not an expression, such as `a(); b()`, which MyGo tries as one first, makes
-WebKit fire the page's `error` event with `Script error.`, which a listener
-hears as `Uncaught Script error.`.
+Policy, goes to the inspector alone.
 
 ### The web inspector
 

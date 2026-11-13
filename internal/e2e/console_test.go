@@ -141,12 +141,12 @@ func TestPageConsoleMessage(t *testing.T) {
 	// A listener that comes as the page showing has the script, from a
 	// listener that went, hears each message once.
 	off()
-	// Expressions: code that is not one, which Eval tries as one first,
-	// makes WebKit tell the page's error listeners of a "Script error.".
-	mustEval(t, w, "console.log('unheard'), 1")
+	mustEval(t, w, "console.log('unheard')")
 	var again consoleHeard
 	offAgain := p.OnConsoleMessage(again.add)
-	mustEval(t, w, "console.warn('again'), console.warn('again 2'), 1")
+	// Statements, which Eval tries as an expression first: the page hears
+	// no error of that.
+	mustEval(t, w, "console.warn('again'); console.warn('again 2')")
 	again.find(t, "again 2")
 	again.mu.Lock()
 	if n := slices.IndexFunc(again.msgs, func(m mygo.ConsoleMessage) bool { return m.Text == "again 2" }); n != 1 || again.msgs[0].Text != "again" {
@@ -165,7 +165,7 @@ func TestPageConsoleMessage(t *testing.T) {
 	// A listener that comes hears the page showing.
 	var late consoleHeard
 	defer p.OnConsoleMessage(late.add)()
-	mustEval(t, w, "console.warn('late'), 1")
+	mustEval(t, w, "console.warn('late')")
 	m = late.find(t, "late")
 	t.Logf("a message of Eval's code: %+v", m)
 	if m.Level != mygo.ConsoleWarn {

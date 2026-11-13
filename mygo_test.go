@@ -1177,6 +1177,46 @@ func TestEval(t *testing.T) {
 	}
 }
 
+// TestEvalCompileCheck: where the backend tells what compiles, code that
+// is no expression runs as a function body without being tried as one,
+// which WebKit would report to the page as an error.
+func TestEvalCompileCheck(t *testing.T) {
+	w, fw := testWindow(t, WindowOptions{})
+	var checked, bodies []string
+	fw.Compiles = func(body string) bool {
+		checked = append(checked, body)
+		return !strings.Contains(body, "await(\nlet ")
+	}
+	fw.AsyncFunction = func(body string) (string, error) {
+		bodies = append(bodies, body)
+		switch {
+		case strings.Contains(body, "await(\ndocument.title\n)"):
+			return `{"ok":true,"v":"Title"}`, nil
+		case strings.Contains(body, "await(async()=>{\nlet x = 1; return x\n})()"):
+			return `{"ok":true,"v":1}`, nil
+		case strings.Contains(body, "await(async()=>{\nlet ("):
+			return "", errors.New("SyntaxError: Unexpected token '('")
+		}
+		return "", errors.New("SyntaxError: Unexpected token")
+	}
+	if v, err := w.Page().Eval("document.title;"); err != nil || v != "Title" || len(bodies) != 1 {
+		t.Errorf("Eval expression = %v, %v (bodies %q)", v, err, bodies)
+	}
+	if len(checked) != 1 || checked[0] != bodies[0] {
+		t.Errorf("checked %q, want what ran first, %q", checked, bodies)
+	}
+	bodies = nil
+	if n, err := EvalAs[int](w.Page(), "let x = 1; return x"); err != nil || n != 1 || len(bodies) != 1 {
+		t.Errorf("Eval statements = %v, %v (bodies %q)", n, err, bodies)
+	}
+	// Code that compiles in neither form fails with the body's error, as
+	// without a check.
+	bodies = nil
+	if _, err := w.Page().Eval("let ("); err == nil || err.Error() != "SyntaxError: Unexpected token '('" || len(bodies) != 1 {
+		t.Errorf("Eval of a syntax error = %v (bodies %q)", err, bodies)
+	}
+}
+
 // TestEvalLateReply: on the main thread, a reply arriving after the
 // cancellation of the context was delivered, before EvalContext took it,
 // must not block.

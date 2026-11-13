@@ -11,9 +11,11 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ebitengine/purego"
 	"github.com/ebitengine/purego/objc"
 
 	"github.com/egoist/mygo/internal/bridge"
+	"github.com/egoist/mygo/internal/jsc"
 	"github.com/egoist/mygo/internal/platform"
 )
 
@@ -1747,6 +1749,16 @@ func (w *window) CallAsyncFunction(body string, cb func(string, error)) {
 			uintptr(nsString(body)), 0, 0, uintptr(send(class("WKContentWorld"), "pageWorld")), uintptr(blk))
 	})
 }
+
+// javaScriptCore checks the syntax of what CallAsyncFunction runs with the
+// engine WebKit links, opened the first time Eval needs it.
+var javaScriptCore = jsc.Syntax{Open: func() (uintptr, error) {
+	return purego.Dlopen("/System/Library/Frameworks/JavaScriptCore.framework/JavaScriptCore", purego.RTLD_GLOBAL|purego.RTLD_NOW)
+}}
+
+// CompilesFunction reports whether CallAsyncFunction would compile body
+// (platform.CompileCheckWindow).
+func (w *window) CompilesFunction(body string) bool { return javaScriptCore.CompilesFunction(body) }
 
 func (w *window) SetZoom(f float64) { msgSetFloat(w.web, sel("setPageZoom:"), f) }
 func (w *window) Zoom() float64     { return msgFloat(w.web, sel("pageZoom")) }

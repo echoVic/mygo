@@ -715,6 +715,40 @@ func TestEvalForms(t *testing.T) {
 	}
 }
 
+// TestEvalStatementsRaiseNoError: code that runs fine raises no error in
+// the page, though Eval tries it as an expression first. WebKit reports a
+// script that does not compile to the page's error event (as "Script
+// error.": the script has no URL), so the try must not hand it one.
+func TestEvalStatementsRaiseNoError(t *testing.T) {
+	w := newWindow(t, mygo.WindowOptions{Hidden: true})
+	w.Page().LoadHTML(`<script>window.errors = []; addEventListener("error", e => errors.push(e.message))</script>`, "")
+	waitFor(t, w, "window.errors")
+	cases := []struct{ code, want string }{
+		{"1 + 1", "2"},
+		{"const xs = [1, 2]; return xs.map(x => x * 3)", "[3 6]"},
+		{"await new Promise(r => setTimeout(r)); return 'later'", "later"},
+		{"window.runs = (window.runs || 0) + 1; if (runs > 1) throw new Error('ran twice')", "<nil>"},
+	}
+	for _, c := range cases {
+		v, err := w.Page().Eval(c.code)
+		if err != nil || fmt.Sprint(v) != c.want {
+			t.Errorf("Eval(%q) = %v, %v; want %s", c.code, v, err, c.want)
+		}
+	}
+	var evalErr *mygo.EvalError
+	if _, err := w.Page().Eval("throw new Error('boom')"); !errors.As(err, &evalErr) || evalErr.Message != "boom" {
+		t.Errorf("Eval(throw) = %v", err)
+	}
+	if got := mustEval(t, w, "JSON.stringify(errors)"); got != "[]" {
+		t.Errorf("the page heard errors: %s", got)
+	}
+	// Code that compiles in neither form still fails, with the engine's
+	// SyntaxError.
+	if _, err := w.Page().Eval("1 +"); err == nil || !strings.HasPrefix(err.Error(), "SyntaxError") {
+		t.Errorf("Eval(1 +) = %v, want a SyntaxError", err)
+	}
+}
+
 // TestThemePreferencesReachThePage checks the whole path from the desktop
 // to a real page: the accent color and the settings of accessibility as
 // mygo-runtime's preferences and the CSS variables of :root, which the

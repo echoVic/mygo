@@ -623,6 +623,8 @@ type Window struct {
 	// AsyncCallback, when set, receives CallAsyncFunction calls to answer
 	// through reply whenever it wants, on the main thread.
 	AsyncCallback func(body string, reply func(string, error))
+	// Compiles answers CompilesFunction; nil compiles every body.
+	Compiles func(body string) bool
 	// OnEval, when set, receives the scripts passed to Eval instead of
 	// recording them.
 	OnEval func(js string)
@@ -964,6 +966,11 @@ func (w *Window) CallAsyncFunction(body string, cb func(string, error)) {
 		return
 	}
 	cb(res, err)
+}
+
+// CompilesFunction is platform.CompileCheckWindow's, answered by Compiles.
+func (w *Window) CompilesFunction(body string) bool {
+	return w.Compiles == nil || w.Compiles(body)
 }
 
 func (w *Window) Close() {

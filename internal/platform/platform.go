@@ -155,6 +155,16 @@ type InputRegionWindow interface {
 	SetInputRegion(region []Rect)
 }
 
+// CompileCheckWindow tells, without running it, whether
+// Window.CallAsyncFunction would compile body (macOS and Linux, with
+// JavaScriptCore). WebKit reports a body that does not compile to the
+// page's error event, as "Script error.", which Eval's try of code as an
+// expression must not raise. Apart from Window, so that only apps calling
+// Eval link it.
+type CompileCheckWindow interface {
+	CompilesFunction(body string) bool
+}
+
 // WindowStateBackend restores windows at their pixels (Windows):
 // RestoreWindowState sets opts.StateBounds and returns true when pixels,
 // zero for none, would show on a connected display. Otherwise the core

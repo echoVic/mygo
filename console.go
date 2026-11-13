@@ -79,10 +79,7 @@ const maxConsoleMessage = 16 << 10
 // It hears the page's own document, not its iframes nor its workers, and
 // only what goes through the console's methods: what the engine logs
 // itself, as a resource that failed to load or a violation of the page's
-// Content Security Policy, goes to the web inspector alone. On macOS,
-// Page.Eval of code that is not an expression, which it tries as one
-// first, makes WebKit fire the page's error event with "Script error.",
-// which listeners hear as "Uncaught Script error.".
+// Content Security Policy, goes to the web inspector alone.
 func (p *Page) OnConsoleMessage(fn func(m ConsoleMessage)) (off func()) {
 	linkConsole()
 	w := p.w
