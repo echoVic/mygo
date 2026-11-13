@@ -65,12 +65,15 @@ export function hookConsole(scope: Scope, post: (message: string) => void, max: 
   for (const [name, level] of Object.entries(METHODS)) {
     const original = target[name];
     if (typeof original !== "function") continue;
-    target[name] = function (this: unknown, ...args: unknown[]) {
+    const wrapper = function (this: unknown, ...args: unknown[]) {
       // Made here, so that the frame after this one is the caller's.
       const stack = new Error().stack;
       tell(() => call(name, level, args, stack, max));
-      return original.apply(target, args);
+      return original.apply(this, args);
     };
+    // Named as the method it wraps, as the console's own are.
+    Object.defineProperty(wrapper, "name", { value: name });
+    target[name] = wrapper;
   }
   scope.addEventListener("error", (e) => tell(() => uncaught(e, max)));
   scope.addEventListener("unhandledrejection", (e) => tell(() => rejection(e, max)));

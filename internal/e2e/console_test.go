@@ -137,6 +137,9 @@ func TestPageConsoleMessage(t *testing.T) {
 	if v := mustEval(t, w, "console.log.toString().includes('[native code]')"); v != false {
 		t.Error("a page whose console Go hears has its own console.log")
 	}
+	if v := mustEval(t, w, "[console.log.name, console.assert.name].join()"); v != "log,assert" {
+		t.Errorf("the console's methods are named %v", v)
+	}
 
 	// A listener that comes as the page showing has the script, from a
 	// listener that went, hears each message once.

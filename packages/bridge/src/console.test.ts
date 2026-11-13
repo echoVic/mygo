@@ -59,6 +59,16 @@ describe("console calls", () => {
     expect(sent[0]!.s).toBeUndefined(); // no stack but a trace's
   });
 
+  test("keep the methods' names and the caller's this", () => {
+    const { c, calls } = setup();
+    for (const name of ["log", "info", "warn", "error", "debug", "trace", "assert"]) expect(c[name]!.name).toBe(name);
+    const other = {};
+    c.log!.call(other, "x");
+    const { log } = c;
+    log!("unbound");
+    expect(calls.map(([, self]) => self)).toEqual([other, undefined]);
+  });
+
   test("tell where they were made", () => {
     const { c, sent } = setup();
     const here = callSite(new Error().stack, 0)!; c.warn!("here"); // prettier-ignore
