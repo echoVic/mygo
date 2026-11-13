@@ -205,6 +205,9 @@ type Recording struct {
 	interval   time.Duration
 	stopNative func()
 	stopOnce   sync.Once
+	// clock, when set, says how long the recording has run instead of the
+	// time since start: tests move it.
+	clock func() time.Duration
 
 	mu        sync.Mutex
 	ended     bool
@@ -264,10 +267,18 @@ const (
 // wants reports whether deliver would pass on a frame now, for platforms
 // to skip the work of one it would drop.
 func (r *Recording) wants() bool {
-	t := time.Since(r.start)
+	t := r.elapsed()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return !r.ended && !r.early(t)
+}
+
+// elapsed returns how long the recording has run.
+func (r *Recording) elapsed() time.Duration {
+	if r.clock != nil {
+		return r.clock()
+	}
+	return time.Since(r.start)
 }
 
 // early reports whether t is too soon after the last frame.
@@ -282,7 +293,7 @@ func (r *Recording) deliver(pix []byte, w, h, stride, order int) {
 	if w <= 0 || h <= 0 || stride < w*4 || len(pix) < (h-1)*stride+w*4 {
 		return
 	}
-	t := time.Since(r.start)
+	t := r.elapsed()
 	r.mu.Lock()
 	if r.ended || r.early(t) {
 		r.mu.Unlock()

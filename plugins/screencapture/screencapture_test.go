@@ -6,12 +6,17 @@ import (
 	"time"
 )
 
-func newRecording(rate int) *Recording {
+// newRecording returns a recording at rate frames a second whose clock
+// stands still at *now, which the test moves.
+func newRecording(rate int, now *time.Duration) *Recording {
+	if now == nil {
+		now = new(time.Duration)
+	}
 	return &Recording{
 		frames:   make(chan Frame, frameBuffer),
 		done:     make(chan struct{}),
-		start:    time.Now(),
 		interval: time.Second / time.Duration(Options{FrameRate: rate}.frameRate()),
+		clock:    func() time.Duration { return *now },
 	}
 }
 
@@ -34,16 +39,16 @@ func TestToRGBA(t *testing.T) {
 }
 
 func TestDeliverDropsTheOldest(t *testing.T) {
-	r := newRecording(240)
+	var now time.Duration
+	r := newRecording(240, &now)
 	for i := range 5 {
 		r.deliver([]byte{byte(i), 0, 0, 0}, 1, 1, 4, orderRGBA)
-		r.mu.Lock()
-		r.delivered = false // not rate limited
-		r.mu.Unlock()
+		now += r.interval
 	}
 	var got []byte
 	for range frameBuffer {
-		got = append(got, (<-r.Frames()).Image.Pix[0])
+		f := <-r.Frames()
+		got = append(got, f.Image.Pix[0])
 	}
 	if string(got) != string([]byte{3, 4}) {
 		t.Errorf("frames %v, want the newest, 3 and 4", got)
@@ -51,7 +56,8 @@ func TestDeliverDropsTheOldest(t *testing.T) {
 }
 
 func TestDeliverKeepsTheFrameRate(t *testing.T) {
-	r := newRecording(10)
+	var now time.Duration
+	r := newRecording(10, &now)
 	if !r.wants() {
 		t.Fatal("a new recording wants a frame")
 	}
@@ -63,17 +69,28 @@ func TestDeliverKeepsTheFrameRate(t *testing.T) {
 	if n := len(r.frames); n != 1 {
 		t.Errorf("%d frames, want 1", n)
 	}
-	r.mu.Lock()
-	r.last -= 100 * time.Millisecond
-	r.mu.Unlock()
+	// A frame a little early still counts, as frames come at the
+	// display's rate, which is not a multiple of FrameRate's interval.
+	now = 80 * time.Millisecond
+	if r.wants() {
+		t.Error("wants a frame 80 ms after one, at 10 a second")
+	}
+	now = 90 * time.Millisecond
+	if !r.wants() {
+		t.Error("wants no frame 90 ms after one, at 10 a second")
+	}
 	r.deliver([]byte{1, 2, 3, 4}, 1, 1, 4, orderRGBA)
 	if n := len(r.frames); n != 2 {
-		t.Errorf("%d frames a tenth of a second later, want 2", n)
+		t.Errorf("%d frames 90 ms later, want 2", n)
+	}
+	<-r.Frames()
+	if f := <-r.Frames(); f.Time != 90*time.Millisecond {
+		t.Errorf("the second frame came at %v, want 90ms", f.Time)
 	}
 }
 
 func TestDeliverChecksTheSize(t *testing.T) {
-	r := newRecording(0)
+	r := newRecording(0, nil)
 	r.deliver(make([]byte, 7), 1, 2, 4, orderBGRA)
 	r.deliver(make([]byte, 8), 2, 1, 4, orderBGRA)
 	if len(r.frames) != 0 {
@@ -82,7 +99,7 @@ func TestDeliverChecksTheSize(t *testing.T) {
 }
 
 func TestStop(t *testing.T) {
-	r := newRecording(0)
+	r := newRecording(0, nil)
 	stopped := 0
 	r.stopNative = func() { stopped++ }
 	if err := r.Stop(); err != nil || stopped != 1 {
@@ -100,7 +117,7 @@ func TestStop(t *testing.T) {
 }
 
 func TestEndKeepsTheError(t *testing.T) {
-	r := newRecording(0)
+	r := newRecording(0, nil)
 	r.stopNative = func() {}
 	gone := errors.New("gone")
 	r.end(gone)
