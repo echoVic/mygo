@@ -90,6 +90,7 @@ framework safely. Read it before changing anything under `internal/`.
 │   ├── automationcli/  mygo-automation, the command line client of plugins/automation's socket
 │   ├── watchdriver/    the goroutine that runs a backend's file watcher
 │   ├── bridge/         embeds bridge.js, built from packages/bridge
+│   ├── jsexpr/         tells JavaScript that cannot be an expression from its tokens, for Page.Eval
 │   ├── surface/        the connection between a window and its native UI
 │   ├── pacing/         whether frames wait for the display (MYGO_UNCAPPED)
 │   ├── scene/          display lists and glyph atlases, what renderers draw
@@ -1229,9 +1230,22 @@ on Linux), which awaits promises and ignores the page's Content Security
 Policy. The code is first wrapped as `return JSON.stringify({ok, v: await (code)})`;
 if that fails to compile the code is not an expression, and it is run again as
 a function body. A compile error means nothing executed, so code never runs
-twice. The result travels as a JSON string and is decoded in Go. A page whose
-window closed never answers, so a window closing fails the evals waiting for
-it, and an eval with the quit under way fails at once.
+twice. WebKit, though, tells the page's `error` event of a script that does
+not compile (`ScriptController::callInWorld` reports the exception, as
+`Script error.`: the script has no URL), so code that cannot be an
+expression runs as a function body without the try. `internal/jsexpr` tells
+it from its tokens alone (outside brackets, a `;`, a word only statements
+have, or two operands in a row), and answers "maybe" where they don't settle
+it, as for a `/` after `}`: that code is tried as before.
+`TestNotExpressionInTheEngine` checks its answers against the webview's
+engine. Compiling the code in the page (`new Function`) would tell every case,
+but the page world, which Eval runs in, is subject to the page's CSP: without
+`'unsafe-eval'` that throws an `EvalError` and reports the violation to the
+page (`securitypolicyviolation`, and its `report-uri`), and a Trusted Types
+default policy would see the code. The result travels as a JSON string and is
+decoded in Go. A page whose window closed never answers, so a window closing
+fails the evals waiting for it, and an eval with the quit under way fails at
+once.
 
 ### Trust
 

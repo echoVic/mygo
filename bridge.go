@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/egoist/mygo/internal/bridge"
+	"github.com/egoist/mygo/internal/jsexpr"
 	"github.com/egoist/mygo/internal/platform"
 )
 
@@ -197,7 +198,19 @@ func (w *Window) eval(ctx context.Context, code string) (jsontext.Value, error) 
 		}
 		// The page of a closed window never answers.
 		off = w.onClosed.add(func() { deliver(ch, result{err: errDestroyed}) }, false)
+		body := func(n platform.Window) {
+			n.CallAsyncFunction(fmt.Sprintf(evalBody, code), func(res string, err error) {
+				deliver(ch, result{raw: res, err: err})
+			})
+		}
 		expr := strings.TrimRight(code, " \t\r\n;")
+		// Code that cannot be an expression runs as a function body at
+		// once: WebKit tells the page's error event of a script that does
+		// not compile ("Script error.").
+		if jsexpr.NotExpression(expr) {
+			body(n)
+			return
+		}
 		n.CallAsyncFunction(fmt.Sprintf(evalExpr, expr), func(res string, err error) {
 			if err == nil {
 				deliver(ch, result{raw: res})
@@ -216,9 +229,7 @@ func (w *Window) eval(ctx context.Context, code string) (jsontext.Value, error) 
 					deliver(ch, result{err: errDestroyed})
 					return
 				}
-				w.native.CallAsyncFunction(fmt.Sprintf(evalBody, code), func(res string, err error) {
-					deliver(ch, result{raw: res, err: err})
-				})
+				body(w.native)
 			})
 		})
 	})

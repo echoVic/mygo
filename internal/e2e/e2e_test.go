@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/internal/jsexpr"
 	"github.com/egoist/mygo/internal/wait"
 	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
@@ -166,6 +167,7 @@ func TestMain(m *testing.M) {
 		io.WriteString(w, pipPage)
 	})
 	mux.HandleFunc("/session/", sessionPage)
+	mux.HandleFunc("/eval-errors", evalErrorsPage)
 	mux.HandleFunc("POST /echo", func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		fmt.Fprintf(w, "echo:%s", b)
@@ -711,6 +713,116 @@ func TestEvalForms(t *testing.T) {
 	var evalErr *mygo.EvalError
 	if _, err := w.Page().Eval("throw new Error('boom')"); !errors.As(err, &evalErr) || evalErr.Message != "boom" {
 		t.Errorf("Eval(throw) = %v", err)
+	}
+}
+
+// evalErrorsPage hears the errors and the violations of its Content
+// Security Policy (?csp, which allows its own script alone) that the page
+// is told of.
+func evalErrorsPage(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Has("csp") {
+		w.Header().Set("Content-Security-Policy", "script-src 'nonce-e2e'")
+	}
+	w.Header().Set("Content-Type", "text/html")
+	io.WriteString(w, `<!doctype html><title>`+r.URL.RawQuery+`</title><script nonce="e2e">
+window.heard = [];
+addEventListener("error", (e) => heard.push(e.message));
+document.addEventListener("securitypolicyviolation", (e) => heard.push("violation of " + e.effectiveDirective));
+</script>`)
+}
+
+// TestEvalStatementsRaiseNoError: Eval of statements tells the page of no
+// error, under a Content Security Policy that forbids eval too. WebKit
+// tells the page's error event of a script that does not compile ("Script
+// error.": the script has no URL), and Eval tries code as an expression
+// first, so it must not try code that cannot be one.
+func TestEvalStatementsRaiseNoError(t *testing.T) {
+	w := newWindow(t, mygo.WindowOptions{Hidden: true})
+	cases := []struct{ code, want string }{
+		{"1 + 1", "2"},
+		{"document.title;", "csp"},
+		{"const xs = [1, 2]; return xs.map(x => x * 3)", "[3 6]"},
+		{"let n = 0\nfor (const x of [1, 2, 3]) n += x\nreturn n", "6"},
+		{"if (document.title) { return 'if' }", "if"},
+		{"document.body.dataset.a = 'b'\ndocument.body.dataset.c = 'd'", "<nil>"},
+		{"await new Promise(r => setTimeout(r)); return 'later'", "later"},
+		{"window.runs = (window.runs || 0) + 1; if (runs > 1) throw new Error('ran twice')", "<nil>"},
+	}
+	for _, query := range []string{"no-csp", "csp"} {
+		if err := w.Page().LoadURL("app://localhost/eval-errors?" + query); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, w, fmt.Sprintf("document.title === %q && window.heard", query))
+		for _, c := range cases {
+			want := c.want
+			if want == "csp" {
+				want = query
+			}
+			v, err := w.Page().Eval(c.code)
+			if err != nil || fmt.Sprint(v) != want {
+				t.Errorf("%s: Eval(%q) = %v, %v; want %s", query, c.code, v, err, want)
+			}
+		}
+		var evalErr *mygo.EvalError
+		if _, err := w.Page().Eval("throw new Error('boom')"); !errors.As(err, &evalErr) || evalErr.Message != "boom" {
+			t.Errorf("%s: Eval(throw) = %v", query, err)
+		}
+		if got := mustEval(t, w, "document.body.dataset.a + document.body.dataset.c"); got != "bd" {
+			t.Errorf("%s: statements on two lines ran as %v", query, got)
+		}
+		if got := mustEval(t, w, "JSON.stringify(heard)"); got != "[]" {
+			t.Errorf("%s: the page heard %s", query, got)
+		}
+		// Code that compiles in neither form fails with the engine's
+		// SyntaxError, as it did.
+		if _, err := w.Page().Eval("return 1 +"); err == nil || errors.As(err, &evalErr) || !strings.HasPrefix(err.Error(), "SyntaxError") {
+			t.Errorf("%s: Eval of code that does not compile = %v", query, err)
+		}
+	}
+}
+
+// TestNotExpressionInTheEngine: what jsexpr.NotExpression tells cannot be
+// an expression does not compile as Eval's expression in the webview's
+// engine, so that Eval, which runs it as a function body at once, returns
+// what trying it would have.
+func TestNotExpressionInTheEngine(t *testing.T) {
+	b, err := os.ReadFile("../jsexpr/testdata/codes.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var codes []struct{ Code string }
+	if err := json.Unmarshal(b, &codes); err != nil {
+		t.Fatal(err)
+	}
+	var bodies, nots []string
+	for _, c := range codes {
+		// As Eval tries an expression.
+		expr := strings.TrimRight(c.Code, " \t\r\n;")
+		if jsexpr.NotExpression(expr) {
+			nots = append(nots, c.Code)
+			bodies = append(bodies, "try{return JSON.stringify({ok:true,v:await(\n"+expr+"\n)})}catch(e){return JSON.stringify({ok:false,e:String(e&&e.message||e)})}")
+		}
+	}
+	js, err := json.Marshal(bodies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := newWindow(t, mygo.WindowOptions{Hidden: true})
+	w.Page().LoadHTML("<p>engine</p>", "")
+	waitFor(t, w, "document.querySelector('p')")
+	got, err := mygo.EvalAs[[]string](w.Page(), `((bodies) => bodies.map((b) => {
+	try { new (async function () {}).constructor(b); return "compiles" } catch (e) { return e.name }
+}))(`+string(js)+`)`)
+	if err != nil || len(got) != len(nots) {
+		t.Fatalf("compiling %d codes: %q, %v", len(nots), got, err)
+	}
+	for i, code := range nots {
+		if got[i] != "SyntaxError" {
+			t.Errorf("%q is no expression to jsexpr, but the engine says %s", code, got[i])
+		}
+	}
+	if len(nots) == 0 {
+		t.Error("no code to check")
 	}
 }
 

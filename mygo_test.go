@@ -1134,10 +1134,12 @@ func TestEval(t *testing.T) {
 		switch {
 		case strings.Contains(body, "await(\ndocument.title\n)"):
 			return `{"ok":true,"v":"Title"}`, nil
-		case strings.Contains(body, "await(\nlet x = 1; return x\n)"):
-			return "", errors.New("SyntaxError: Unexpected token")
 		case strings.Contains(body, "await(async()=>{\nlet x = 1; return x\n})()"):
 			return `{"ok":true,"v":1}`, nil
+		case strings.Contains(body, "await(\nx++\nreturn2()\n)"):
+			return "", errors.New("SyntaxError: Unexpected identifier 'return2'")
+		case strings.Contains(body, "await(async()=>{\nx++\nreturn2()\n})()"):
+			return `{"ok":true,"v":2}`, nil
 		case strings.Contains(body, "boom"):
 			return `{"ok":false,"e":"boom"}`, nil
 		}
@@ -1147,9 +1149,18 @@ func TestEval(t *testing.T) {
 	if err != nil || v != "Title" {
 		t.Errorf("Eval expression = %v, %v", v, err)
 	}
+	// Statements that cannot be an expression run as a function body at
+	// once: WebKit tells the page of a script that does not compile.
+	bodies = nil
 	n, err := EvalAs[int](w.Page(), "let x = 1; return x")
-	if err != nil || n != 1 {
+	if err != nil || n != 1 || len(bodies) != 1 {
 		t.Errorf("Eval statements = %v, %v (bodies %q)", n, err, bodies)
+	}
+	// Others are tried as an expression first.
+	bodies = nil
+	n, err = EvalAs[int](w.Page(), "x++\nreturn2()")
+	if err != nil || n != 2 || len(bodies) != 2 {
+		t.Errorf("Eval statements tried as an expression = %v, %v (bodies %q)", n, err, bodies)
 	}
 	var evalErr *EvalError
 	if _, err := w.Page().Eval("boom()"); !errors.As(err, &evalErr) || evalErr.Message != "boom" {
