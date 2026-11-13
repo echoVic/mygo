@@ -17,6 +17,10 @@ img, err := screencapture.Capture(ctx, screencapture.Source{}, screencapture.Opt
 `img` is an `*image.RGBA` of the main display, at its pixels: a Retina
 display gives twice its size in points.
 
+[examples/screencapture](../../examples/screencapture) takes the main
+display, or lists the windows on the screen and takes the one chosen,
+and shows what it took.
+
 ## Sources
 
 The zero `Source` is the main display. `DisplaySource` takes the ID of

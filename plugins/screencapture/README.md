@@ -19,4 +19,5 @@ for f := range rec.Frames() {
 `go test ./plugins/screencapture` with `MYGO_SCREENCAPTURE=1` captures
 the real screen, and writes what it took to `MYGO_SCREENCAPTURE_OUT`.
 
-See [the documentation](../../docs/plugins/screencapture.md).
+See [the documentation](../../docs/plugins/screencapture.md), and
+`examples/screencapture`.
