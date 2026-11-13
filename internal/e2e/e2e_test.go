@@ -166,6 +166,7 @@ func TestMain(m *testing.M) {
 		io.WriteString(w, pipPage)
 	})
 	mux.HandleFunc("/session/", sessionPage)
+	mux.HandleFunc("/console/", consolePage)
 	mux.HandleFunc("POST /echo", func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		fmt.Fprintf(w, "echo:%s", b)
