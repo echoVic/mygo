@@ -651,6 +651,11 @@ features GTK 4 lacks become X11-only code beside it.
   with a base URL serves the document from that URL the same way.
 - **Eval** goes through the DevTools protocol (`Runtime.evaluate` with
   `awaitPromise`), which reports syntax errors and ignores the page's CSP.
+  A method that fails has the protocol's message and its HRESULT in its
+  error. An evaluation whose document went away fails with code -32000,
+  "Inspected target navigated or closed", before the next document
+  commits, which the backend reports as `platform.ErrNavigated` (see
+  "Eval").
   Edit roles run `document.execCommand` with a user gesture, except Paste:
   `Input.dispatchKeyEvent` carries Chromium's `paste` command on an
   `Unidentified` raw key-down, followed by key-up once it completes. The
@@ -1247,7 +1252,9 @@ process, and the old one puts its page away after the new one commits;
 its answer comes later, which a core failing evals at the commit would
 drop. An eval that reaches the next document runs there, and `pushState`
 and fragments fire no `pagehide`, so only the evals of the document left
-fail.
+fail. WebView2 fails such an evaluation itself before the next document
+commits, which can come before the page's answer; the backend reports
+that as `platform.ErrNavigated`, the error Eval returns either way.
 
 ### Trust
 

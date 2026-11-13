@@ -864,7 +864,7 @@ func (w *window) devtools(method, params string, done func(string, error)) {
 			return
 		}
 		if failed(hr) {
-			cb("", hresultError(method, hr))
+			cb("", devtoolsFailure(method, hr, wstr(result)))
 			return
 		}
 		cb(wstr(result), nil)
@@ -877,6 +877,26 @@ func (w *window) devtools(method, params string, done func(string, error)) {
 			cb("", hresultError(method, hr))
 		}
 	}
+}
+
+// devtoolsFailure is the error of method, which failed with hr and
+// result, the protocol's answer: {"error":{"code":…,"message":…},"id":…}.
+// An evaluation whose document went away is ErrNavigated: Chromium fails
+// what it waits for then, before the next document commits.
+func devtoolsFailure(method string, hr uintptr, result string) error {
+	var answer any
+	_ = json.Unmarshal([]byte(result), &answer)
+	top, _ := answer.(map[string]any)
+	e, _ := top["error"].(map[string]any)
+	code, _ := e["code"].(float64)
+	message, _ := e["message"].(string)
+	switch {
+	case method == "Runtime.evaluate" && code == -32000 && message == "Inspected target navigated or closed":
+		return platform.ErrNavigated
+	case message != "":
+		return fmt.Errorf("mygo: %s failed: %s (HRESULT %#08x)", method, message, uint32(hr))
+	}
+	return hresultError(method, hr)
 }
 
 func (w *window) SetZoom(f float64) {

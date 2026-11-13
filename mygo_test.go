@@ -1166,10 +1166,18 @@ func TestEval(t *testing.T) {
 	}
 
 	// The page left before the code answered says so, rather than as the
-	// code's own error.
+	// code's own error, whether its pagehide or the backend tells it.
 	fw.AsyncFunction = func(string) (string, error) { return `{"left":true}`, nil }
-	if _, err := w.Page().Eval("pending"); !errors.Is(err, errNavigated) {
-		t.Errorf("Eval in a page left = %v, want %v", err, errNavigated)
+	if _, err := w.Page().Eval("pending"); !errors.Is(err, platform.ErrNavigated) {
+		t.Errorf("Eval in a page left = %v, want %v", err, platform.ErrNavigated)
+	}
+	bodies = nil
+	fw.AsyncFunction = func(body string) (string, error) {
+		bodies = append(bodies, body)
+		return "", platform.ErrNavigated
+	}
+	if _, err := w.Page().Eval("pending"); !errors.Is(err, platform.ErrNavigated) || len(bodies) != 1 {
+		t.Errorf("Eval in a page the backend says was left = %v, ran %d times; want %v, once", err, len(bodies), platform.ErrNavigated)
 	}
 
 	// Only a syntax error means the code did not run: other failures are

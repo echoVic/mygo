@@ -1788,10 +1788,6 @@ func (w *Window) CapturePage() ([]byte, error) {
 
 var errDestroyed = errors.New("mygo: window has been destroyed")
 
-// errNavigated is returned by Eval when the page it ran in was left
-// before it answered.
-var errNavigated = errors.New("mygo: the page navigated away before it answered")
-
 // errNoPage is returned by the page methods of windows showing Content.
 var errNoPage = errors.New("mygo: the window shows Content, not a web page")
 

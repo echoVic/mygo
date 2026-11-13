@@ -251,7 +251,7 @@ func (w *Window) eval(ctx context.Context, code string) (jsontext.Value, error) 
 		return nil, fmt.Errorf("mygo: unexpected eval result %q: %w", r.raw, err)
 	}
 	if out.Left {
-		return nil, errNavigated
+		return nil, platform.ErrNavigated
 	}
 	if !out.OK {
 		return nil, &EvalError{Message: out.E}
