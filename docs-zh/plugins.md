@@ -16,6 +16,7 @@
 - [SF Symbols](plugins/sfsymbols.md)：macOS 上用于原生 UI 的 Apple SF Symbols，由系统绘制。它完全用 Go 实现。
 - [自动化](plugins/automation.md)：一个套接字，另一个进程（端到端测试运行器或智能体）通过它驱动运行中的应用：应用的窗口、其原生 UI 中的元素、输入、菜单、页面中的脚本和截图。它完全用 Go 实现，可选启用，且不包含在发布构建中；`mygo-automation` 是它面向智能体的命令行客户端。
 - [PermissionFlow](plugins/permissionflow.md)：检查和请求必须由用户授予的系统权限，例如辅助功能、屏幕录制和麦克风，并引导用户前往系统设置，将应用拖入权限列表，做法参照 PermissionFlow。完全用 Go 实现。
+- [屏幕捕获](plugins/screencapture.md)：为显示器和窗口截图，也能把它们录制成一帧帧图像，分别使用 ScreenCaptureKit、Windows.Graphics.Capture 和 PipeWire。完全用 Go 实现。
 
 ## 使用插件
 

@@ -111,6 +111,7 @@ func main() {
 - [SF Symbols](plugins/sfsymbols.md)：macOS 上用于原生 UI 的 Apple SF Symbols，由系统绘制。
 - [自动化](plugins/automation.md)：供端到端测试工具和智能体从其他进程控制运行中的应用，包括窗口、元素、输入、菜单和截图，以及面向智能体的命令行客户端 `mygo-automation`。
 - [PermissionFlow](plugins/permissionflow.md)：检查并请求需要用户授权的系统权限，例如“辅助功能”和“屏幕录制”，并引导用户前往“系统设置”，将应用拖入对应的权限列表。
+- [屏幕捕获](plugins/screencapture.md)：为显示器和窗口截图，也能把它们录制成一帧帧图像。
 
 ## 参考
 
