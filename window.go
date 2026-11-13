@@ -471,6 +471,11 @@ type Window struct {
 	contextTarget    *contextTarget
 	shownContextMenu *Menu
 	onContextMenu    listeners[func(*ContextMenuEvent)]
+	// consoleHooked tells that the window's pages get the console script,
+	// while the page has OnConsoleMessage listeners (console.go). Main
+	// thread only.
+	consoleHooked    bool
+	onConsoleMessage listeners[func(ConsoleMessage)]
 	// capture is what the backend last told of the page's capture of
 	// each CaptureKind (CaptureStateChanged), so that listeners hear only
 	// changes. Main thread only.

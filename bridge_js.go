@@ -29,6 +29,8 @@ func (w *Window) zoomChanged() {}
 
 func (w *Window) handleMessage(msg string) {}
 
+func linkConsole() {}
+
 func findScript(text string, opts FindOptions) string { return "" }
 
 func preferencesScript() string { return "" }

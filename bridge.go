@@ -70,9 +70,13 @@ func (w *Window) zoomChanged() {
 const preferencesScriptIndex = 1
 
 // pageScripts are the scripts a page of the window gets at document start:
-// the bridge, the preferences of the page and the preload script.
+// the bridge, the preferences of the page, the console script while it
+// has OnConsoleMessage listeners and the preload script.
 func (w *Window) pageScripts() []platform.UserScript {
 	scripts := []platform.UserScript{{Source: w.bridgeScript()}, {Source: preferencesScript()}}
+	if w.consoleHooked {
+		scripts = append(scripts, platform.UserScript{Source: consoleScript(w)})
+	}
 	if w.preload != "" {
 		scripts = append(scripts, platform.UserScript{Source: w.preload, AllFrames: w.preloadAllFrames})
 	}
@@ -297,6 +301,14 @@ func (w *Window) handleMessage(msg string) {
 		go handleCall(w, w.pageContext(), msg, w.trusted)
 		return
 	}
+	// The console script's (console.go), which only apps that listen link,
+	// heard while the window's pages get it.
+	if strings.HasPrefix(msg, `{"t":"console",`) {
+		if w.consoleHooked {
+			consoleMessage(w, msg)
+		}
+		return
+	}
 	var m struct {
 		T  string  `json:"t"`
 		X  float64 `json:"x"` // drop
@@ -374,6 +386,45 @@ func (w *Window) handleMessage(msg string) {
 	case "chan-close":
 		w.pageClosedChannel(m.C, m.K)
 	}
+}
+
+// linkConsole links what the page's console takes (OnConsoleMessage):
+// its script, and the decoding of its messages.
+func linkConsole() {
+	consoleOnce.Do(func() {
+		consoleScript = func(w *Window) string {
+			limit := maxConsoleMessage
+			if w.untrusted {
+				limit = maxUntrustedMessage - len(w.secret) // what handleMessage takes
+			}
+			return bridge.ConsoleScript(bridge.ConsoleConfig{Secret: w.secret, Max: limit})
+		}
+		consoleMessage = consoleMessageOf
+	})
+}
+
+// consoleMessageOf tells the listeners of the page's console a message of
+// its script. Main thread only.
+func consoleMessageOf(w *Window, msg string) {
+	var m struct {
+		L string `json:"l"` // level
+		V string `json:"v"` // text
+		U string `json:"u"` // URL, line and column
+		N int    `json:"n"`
+		C int    `json:"c"`
+		S string `json:"s"` // stack
+	}
+	// A lone surrogate, which a page may log, as U+FFFD.
+	if err := json.Unmarshal(stringBytes(msg), &m, jsontext.AllowInvalidUTF8(true)); err != nil {
+		return
+	}
+	level := ConsoleLevel(m.L)
+	switch level {
+	case ConsoleLog, ConsoleInfo, ConsoleWarn, ConsoleError, ConsoleDebug:
+	default:
+		level = ConsoleLog
+	}
+	fire1(&w.onConsoleMessage, ConsoleMessage{Level: level, Text: m.V, URL: m.U, Line: m.N, Column: m.C, Stack: m.S})
 }
 
 // findScript returns the script with which FindInPage asks the bridge.
