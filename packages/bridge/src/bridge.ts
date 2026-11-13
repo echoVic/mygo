@@ -5,6 +5,7 @@ import { find, stopFind } from "./find";
 import { type FitLimits, fitContent } from "./fit-content";
 import { createRuntime } from "./runtime";
 import { watchThemeColor } from "./theme-color";
+import { transport } from "./transport";
 import type { BridgeConfig, ThemePreferences } from "./types";
 import { markWindowActive } from "./window-active";
 
@@ -239,23 +240,4 @@ function setRootStyle(css: string): void {
   };
   if (document.documentElement) attach();
   else document.addEventListener("DOMContentLoaded", attach, { once: true });
-}
-
-interface Transport {
-  post(message: string): void;
-  /** Posts File objects along with a message (WebView2). */
-  postWithFiles?(message: string, files: FileList): void;
-}
-
-function transport(w: any): Transport | null {
-  const handler = w.webkit?.messageHandlers?.mygo;
-  if (handler) return { post: (m) => handler.postMessage(m) };
-  const webview = w.chrome?.webview;
-  if (!webview) return null;
-  return {
-    post: (m) => webview.postMessage(m),
-    postWithFiles: webview.postMessageWithAdditionalObjects
-      ? (m, files) => webview.postMessageWithAdditionalObjects(m, files)
-      : undefined,
-  };
 }
