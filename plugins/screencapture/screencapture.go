@@ -55,7 +55,8 @@ type Source struct {
 }
 
 // DisplaySource returns the display whose ID is id, as mygo.Display has
-// it (mygo.Screen.Displays). Linux lets the user pick a display instead.
+// it (mygo.Screen.Displays). On Linux, Capture takes the whole desktop
+// instead, and Record lets the user pick a display.
 func DisplaySource(id int64) Source { return Source{id: uint64(id)} }
 
 // WindowSource returns the window whose ID is id, as Window has it. Linux

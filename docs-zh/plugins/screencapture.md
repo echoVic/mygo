@@ -31,7 +31,7 @@ img, err := screencapture.Capture(ctx, wins[0].Source(), screencapture.Options{H
 
 窗口即使被其他窗口挡住，也会按原样截取，但最小化时不行。
 
-Linux 不按 ID 区分显示器和窗口：每次都由门户在桌面的对话框中请用户选择。在 Linux 上，`Windows` 返回 `errors.ErrUnsupported`；显示器来源让用户选择一个显示器，窗口来源（ID 任意）则让用户选择一个窗口。
+Linux 不按 ID 区分显示器和窗口：每次都由门户在桌面的对话框中请用户选择。在 Linux 上，`Windows` 返回 `errors.ErrUnsupported`。对显示器来源，`Capture` 截取整个桌面；对窗口来源（ID 任意），截取用户选择的内容。`Record` 让用户选择一个显示器，对窗口来源则让用户选择一个窗口。
 
 ## 录制
 

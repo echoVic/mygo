@@ -46,8 +46,9 @@ minimized.
 
 Linux knows no displays or windows by ID: its portal asks the user for
 one, in a dialog of the desktop, each time. `Windows` returns
-`errors.ErrUnsupported` there; a display source lets the user pick a
-display, and a window source, of any ID, a window.
+`errors.ErrUnsupported` there. `Capture` of a display source takes the
+whole desktop, and of a window source, of any ID, what the user picks;
+`Record` lets the user pick a display, or for a window source a window.
 
 ## Recordings
 
