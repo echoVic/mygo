@@ -224,3 +224,25 @@ func byOverlap(r platform.Rect, n int, bounds func(int) platform.Rect) []int {
 	}
 	return order
 }
+
+// A PixelDisplay is a display as the screen's space of DIPs takes it, for
+// the module's packages that convert what the system gives in pixels,
+// such as other apps' windows (plugins/screencapture): its bounds in the
+// screen's pixels, and its DPI.
+type PixelDisplay struct {
+	Bounds platform.Rect
+	DPI    int
+}
+
+// PixelRectToDIP converts r, a rectangle of the screen's pixels, to the
+// screen's DIPs, in which platform.Display has its bounds, as the
+// backend converts its own windows' (window.Bounds): in the scale of the
+// display of displays that r is the most on, or the nearest. A display
+// without a DPI, or a screen without displays, takes fallback.
+func PixelRectToDIP(displays []PixelDisplay, fallback int, r platform.Rect) platform.Rect {
+	ds := make([]screenDisplay, len(displays))
+	for i, d := range displays {
+		ds[i] = screenDisplay{bounds: d.Bounds, dpi: d.DPI}
+	}
+	return newDIPSpace(ds, fallback).rectToDIP(r)
+}

@@ -15,8 +15,9 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/internal/gpu/d3d11/device"
+	"github.com/egoist/mygo/internal/platform"
+	winbackend "github.com/egoist/mygo/internal/windows"
 )
 
 // Windows captures with Windows.Graphics.Capture, through its COM
@@ -111,7 +112,6 @@ var (
 	procGetWindowTextLengthW                 = user32.NewProc("GetWindowTextLengthW")
 	procGetWindowLongPtrW                    = user32.NewProc("GetWindowLongPtrW")
 	procGetWindowThreadProcessID             = user32.NewProc("GetWindowThreadProcessId")
-	procGetDpiForWindow                      = user32.NewProc("GetDpiForWindow")
 	procGetShellWindow                       = user32.NewProc("GetShellWindow")
 	procDwmGetWindowAttribute                = dwmapi.NewProc("DwmGetWindowAttribute")
 	procOpenProcess                          = kernel32.NewProc("OpenProcess")
@@ -458,6 +458,7 @@ func windows(context.Context) ([]Window, error) {
 	enumMu.Unlock()
 
 	shell, _, _ := procGetShellWindow.Call()
+	displays, fallback := winbackend.PixelDisplays()
 	var out []Window
 	for _, hwnd := range found { // in z-order, front first
 		if hwnd == shell {
@@ -485,18 +486,16 @@ func windows(context.Context) ([]Window, error) {
 		if r[2] <= r[0] || r[3] <= r[1] {
 			continue
 		}
-		dpi := 96
-		if procGetDpiForWindow.Find() == nil {
-			if d, _, _ := procGetDpiForWindow.Call(hwnd); d != 0 {
-				dpi = int(d)
-			}
-		}
-		dip := func(v int32) int { return (int(v)*96 + dpi/2) / dpi }
+		// The frame is in the screen's pixels, which DWM does not adjust
+		// for DPI. It takes the scale of the display it is the most on,
+		// as the backend's own windows do, not the window's DPI, which is
+		// 96 for a window that is not aware of DPI.
+		frame := platform.Rect{X: int(r[0]), Y: int(r[1]), Width: int(r[2] - r[0]), Height: int(r[3] - r[1])}
 		out = append(out, Window{
 			ID:     uint64(hwnd),
 			Title:  title,
 			App:    windowApp(hwnd),
-			Bounds: mygo.Rectangle{X: dip(r[0]), Y: dip(r[1]), Width: dip(r[2] - r[0]), Height: dip(r[3] - r[1])},
+			Bounds: windowBounds(displays, fallback, frame),
 		})
 	}
 	return out, nil
