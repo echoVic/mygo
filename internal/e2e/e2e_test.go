@@ -797,10 +797,10 @@ func TestNotExpressionInTheEngine(t *testing.T) {
 	var bodies, nots []string
 	for _, c := range codes {
 		// As Eval tries an expression.
-		expr := strings.TrimRight(c.Code, " \t\r\n;")
+		expr := jsexpr.Expr(c.Code)
 		if jsexpr.NotExpression(expr) {
 			nots = append(nots, c.Code)
-			bodies = append(bodies, "try{return JSON.stringify({ok:true,v:await(\n"+expr+"\n)})}catch(e){return JSON.stringify({ok:false,e:String(e&&e.message||e)})}")
+			bodies = append(bodies, fmt.Sprintf(jsexpr.ExprForm, expr))
 		}
 	}
 	js, err := json.Marshal(bodies)

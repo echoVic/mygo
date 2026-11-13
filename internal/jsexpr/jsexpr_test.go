@@ -3,7 +3,6 @@ package jsexpr
 import (
 	"encoding/json"
 	"os"
-	"strings"
 	"testing"
 )
 
@@ -25,7 +24,7 @@ func TestNotExpression(t *testing.T) {
 	}
 	for _, c := range codes {
 		// As Eval trims what it tries as an expression.
-		if got := NotExpression(strings.TrimRight(c.Code, " \t\r\n;")); got != c.Not {
+		if got := NotExpression(Expr(c.Code)); got != c.Not {
 			t.Errorf("NotExpression(%q) = %v, want %v", c.Code, got, c.Not)
 		}
 	}

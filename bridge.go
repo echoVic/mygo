@@ -154,13 +154,6 @@ func (w *Window) sendPreferences(prefs ThemePreferences, script string) {
 // decodeResult decodes the JSON result of eval into v.
 func decodeResult(raw []byte, v any) error { return json.Unmarshal(raw, v) }
 
-const (
-	// The expression form: compile errors mean code is not an expression.
-	evalExpr = "try{return JSON.stringify({ok:true,v:await(\n%s\n)})}catch(e){return JSON.stringify({ok:false,e:String(e&&e.message||e)})}"
-	// The statement form runs code as a function body.
-	evalBody = "try{return JSON.stringify({ok:true,v:await(async()=>{\n%s\n})()})}catch(e){return JSON.stringify({ok:false,e:String(e&&e.message||e)})}"
-)
-
 // evalCanceled, a hook of tests, runs after eval delivered the
 // cancellation of its context.
 var evalCanceled func()
@@ -186,6 +179,13 @@ func (w *Window) eval(ctx context.Context, code string) (jsontext.Value, error) 
 	})
 	defer stop()
 
+	// Code that cannot be an expression runs as a function body at once:
+	// WebKit tells the page's error event of a script that does not compile
+	// ("Script error."). Read here, off the main thread: a big script takes
+	// a while.
+	expr := jsexpr.Expr(code)
+	notExpr := jsexpr.NotExpression(expr)
+
 	ran := false
 	var off func()
 	w.do(func(n platform.Window) {
@@ -199,19 +199,15 @@ func (w *Window) eval(ctx context.Context, code string) (jsontext.Value, error) 
 		// The page of a closed window never answers.
 		off = w.onClosed.add(func() { deliver(ch, result{err: errDestroyed}) }, false)
 		body := func(n platform.Window) {
-			n.CallAsyncFunction(fmt.Sprintf(evalBody, code), func(res string, err error) {
+			n.CallAsyncFunction(fmt.Sprintf(jsexpr.BodyForm, code), func(res string, err error) {
 				deliver(ch, result{raw: res, err: err})
 			})
 		}
-		expr := strings.TrimRight(code, " \t\r\n;")
-		// Code that cannot be an expression runs as a function body at
-		// once: WebKit tells the page's error event of a script that does
-		// not compile ("Script error.").
-		if jsexpr.NotExpression(expr) {
+		if notExpr {
 			body(n)
 			return
 		}
-		n.CallAsyncFunction(fmt.Sprintf(evalExpr, expr), func(res string, err error) {
+		n.CallAsyncFunction(fmt.Sprintf(jsexpr.ExprForm, expr), func(res string, err error) {
 			if err == nil {
 				deliver(ch, result{raw: res})
 				return

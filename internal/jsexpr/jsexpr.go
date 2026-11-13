@@ -1,10 +1,23 @@
-// Package jsexpr tells JavaScript that cannot be an expression from its
-// tokens, without parsing it. Page.Eval runs such code as a function body
-// rather than trying it as an expression first: WebKit tells the page's
-// error event of a script that does not compile.
+// Package jsexpr holds the forms Page.Eval runs code in, and tells
+// JavaScript that cannot be an expression from its tokens, without parsing
+// it. Page.Eval runs such code as a function body rather than trying it as
+// an expression first: WebKit tells the page's error event of a script
+// that does not compile.
 package jsexpr
 
 import "strings"
+
+// The forms of Page.Eval, fmt formats of code (%s) run as the body of an
+// async function: as an expression, which it tries first (a compile error
+// means code is not one), and as a function body.
+const (
+	ExprForm = "try{return JSON.stringify({ok:true,v:await(\n%s\n)})}catch(e){return JSON.stringify({ok:false,e:String(e&&e.message||e)})}"
+	BodyForm = "try{return JSON.stringify({ok:true,v:await(async()=>{\n%s\n})()})}catch(e){return JSON.stringify({ok:false,e:String(e&&e.message||e)})}"
+)
+
+// Expr returns code as Page.Eval puts it in ExprForm: without the spaces
+// and semicolons that end it.
+func Expr(code string) string { return strings.TrimRight(code, " \t\r\n;") }
 
 // What the last token leaves the next one to be, which tells a regular
 // expression from a division.
@@ -67,16 +80,23 @@ func NotExpression(code string) bool {
 				next = operand
 				break
 			}
-			switch {
-			case listed(statementWords, word):
+			switch word {
+			// Words only statements have. throw and do are among them
+			// while the throw expressions and do expressions proposals
+			// have not shipped: in an engine that ships one, "a ?? throw
+			// b" or "do { … }" would compile as an expression, and Eval,
+			// running it as a function body, would quietly return null.
+			case "break", "case", "catch", "const", "continue", "debugger", "default", "do", "else", "export",
+				"finally", "for", "if", "return", "switch", "throw", "try", "var", "while", "with":
 				if depth0 {
 					return true
 				}
-				head = listed(headWords, word)
-			case listed("in instanceof extends", word):
-			case listed("new typeof void delete function class import", word):
+				// A head in parentheses follows these.
+				head = word == "for" || word == "if" || word == "while" || word == "with"
+			case "in", "instanceof", "extends":
+			case "new", "typeof", "void", "delete", "function", "class", "import":
 				starts = true
-			case listed("async await of yield", word):
+			case "async", "await", "of", "yield":
 				next, starts = unsure, true
 				head = word == "await" && wasHead // for await (
 			default:
@@ -186,26 +206,6 @@ func NotExpression(code string) bool {
 			return true
 		}
 		prev = next
-	}
-	return false
-}
-
-// Words only statements have, and those of them a head in parentheses
-// follows.
-const (
-	statementWords = "break case catch const continue debugger default do else export finally for if return switch throw try var while with"
-	headWords      = "for if while with"
-)
-
-// listed reports whether word is one of the words of list, which spaces
-// separate.
-func listed(list, word string) bool {
-	for list != "" {
-		var w string
-		w, list, _ = strings.Cut(list, " ")
-		if w == word {
-			return true
-		}
 	}
 	return false
 }
