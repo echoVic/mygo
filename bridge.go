@@ -201,17 +201,8 @@ func (w *Window) eval(ctx context.Context, code string) (jsontext.Value, error) 
 		}
 		// The page of a closed window never answers.
 		off = w.onClosed.add(func() { deliver(ch, result{err: errDestroyed}) }, false)
-		expr := fmt.Sprintf(evalExpr, strings.TrimRight(code, " \t\r\n;"))
-		// WebKit reports code that does not compile to the page's error
-		// event: where the backend tells beforehand, code that is no
-		// expression runs as a function body without trying.
-		if c, ok := n.(platform.CompileCheckWindow); ok && !c.CompilesFunction(expr) {
-			n.CallAsyncFunction(fmt.Sprintf(evalBody, code), func(res string, err error) {
-				deliver(ch, result{raw: res, err: err})
-			})
-			return
-		}
-		n.CallAsyncFunction(expr, func(res string, err error) {
+		expr := strings.TrimRight(code, " \t\r\n;")
+		n.CallAsyncFunction(fmt.Sprintf(evalExpr, expr), func(res string, err error) {
 			if err == nil {
 				deliver(ch, result{raw: res})
 				return
