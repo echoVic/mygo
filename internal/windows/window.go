@@ -132,6 +132,7 @@ type window struct {
 	// the keyboard is in the menu bar.
 	autoHideMenu, revealed bool
 	inMenu                 bool    // in a menu loop, of the bar or a popup
+	menusHaveKeyboard      bool    // the bar's menu loop took the keyboard from the page (takeKeyboardForMenus)
 	menuKey                menuKey // the letter that opened popupMenuBar
 
 	programmatic bool
@@ -580,6 +581,9 @@ func (w *window) message(m uint32, wp, lp uintptr) (uintptr, bool) {
 		}
 		return 0, false
 	case wmSetFocus:
+		if w.menusHaveKeyboard {
+			return 0, true // the page gets it back once the menus close
+		}
 		if w.surface != nil {
 			procSetFocus.Call(w.surface.hwnd)
 		} else {
@@ -644,8 +648,12 @@ func (w *window) message(m uint32, wp, lp uintptr) (uintptr, bool) {
 		if w.surface != nil {
 			w.surface.liftKeys()
 		}
+		if wp == 0 { // the bar's, or the window menu's, not TrackPopupMenu's
+			w.takeKeyboardForMenus()
+		}
 	case wmExitMenuLoop:
 		w.inMenu = false
+		w.giveKeyboardBack()
 	case wmMenuChar:
 		if r, ok := w.menuChar(wp, lp); ok {
 			return r, true
@@ -1186,6 +1194,20 @@ func (w *window) IsFocused() bool {
 	}
 	fg, _, _ := procGetForegroundWindow.Call()
 	return fg == w.hwnd
+}
+
+// CornerRadius is the 8 DIPs Windows 11 rounds a window's corners with: a
+// window with a frame, a panel, or a frameless one given a CornerRadius
+// (which takes the system's whatever its radius). A maximized or full-screen
+// window, a child host, and every window before Windows 11 are square.
+func (w *window) CornerRadius() float64 {
+	if w.host != nil || !windows11() || w.fullScreen || w.IsMaximized() {
+		return 0
+	}
+	if w.frameless && !w.opts.Panel && w.opts.CornerRadius <= 0 {
+		return 0
+	}
+	return 8
 }
 
 func (w *window) Minimize() { procShowWindow.Call(w.hwnd, swMinimize) }

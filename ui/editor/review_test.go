@@ -745,6 +745,27 @@ func TestReviewConcurrentTyping(t *testing.T) {
 	}
 }
 
+// A command that finds the buffer edited before its own edit runs again
+// until its edit goes in, however many times another goroutine edits
+// first: the letter typed is kept, not left out.
+func TestReviewRetryUntilApplied(t *testing.T) {
+	ct := newEditorTest(t, "", "|")
+	ed, b := &ct.st.ed, ct.st.Buffer
+	runs := 0
+	ed.retry(func() bool {
+		runs++
+		if runs <= 6 {
+			// As another goroutine, between the editor's look and its edit.
+			b.Edit(Edit{Start: 0, End: 0, Text: "z"})
+		}
+		ed.insert("a")
+		return true
+	})
+	if got := strings.ReplaceAll(b.String(), "z", ""); got != "a" {
+		t.Fatalf("after %d runs the text has %q of the letter typed, want \"a\"", runs, got)
+	}
+}
+
 // A caret placed in the text an edit made follows the edits another
 // goroutine makes before the editor looks, even more of them than the
 // buffer's log keeps.

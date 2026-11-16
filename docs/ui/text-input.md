@@ -145,8 +145,11 @@ which see the text around the caret, so that press and hold, Japanese
 conversion and predictions work as in other apps. The keys typed while an
 input method composes are its own, as Enter choosing a candidate or Escape
 giving the composition up: they submit nothing, press no shortcut and
-close no dialog. `Composing` reports whether it composes, its text not yet
-in the string.
+close no dialog. Each platform's input method takes them before the app
+does, and a `Tester` takes them as it does, so `Compose` then `Key` shows
+what users get. Chords with Ctrl or Command that the input method leaves
+go to shortcuts as at any time. `Composing` reports
+whether it composes, its text not yet in the string.
 
 The input keeps the text being edited, its selection and its undo history
 from frame to frame; setting the string from elsewhere replaces the text.

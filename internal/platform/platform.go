@@ -113,7 +113,9 @@ type Backend interface {
 	// before Init, from any goroutine.
 	ReplaceFile(target, replacement string) error
 
-	NewTray(h TrayHandler) (Tray, error)
+	// NewTray makes a tray icon. id is TrayOptions.ID, which Linux needs
+	// as the icon is made; the other backends take it through Tray.SetID.
+	NewTray(id string, h TrayHandler) (Tray, error)
 	// RegisterHotkey makes accelerator a global shortcut. description says
 	// what it does, for desktops that show the app's shortcuts to the
 	// user; such desktops tell the keys they bound with HotkeyBound.
@@ -178,6 +180,15 @@ type StyleBackend interface {
 // only.
 type WindowButtonsBackend interface {
 	WindowButtons() (start, end []string)
+}
+
+// ExitBackend releases what the native application must not take into the
+// process's exit (Windows: its windows, whose window procedure is Go's and
+// cannot run once the process exits). The app calls Exiting once, on the
+// main thread, when it has finished and is about to exit; nothing native
+// is used after it.
+type ExitBackend interface {
+	Exiting()
 }
 
 // AppOptions configures Backend.Init.
@@ -601,6 +612,10 @@ type Window interface {
 	Focus()
 	Blur()
 	IsFocused() bool
+	// CornerRadius is the radius, in DIPs, the window's corners are
+	// rounded to on screen, or 0 when they are square or the system
+	// does not tell it.
+	CornerRadius() float64
 	Minimize()
 	IsMinimized() bool
 	Maximize()
@@ -1071,6 +1086,16 @@ type Menu struct {
 	RightToLeft bool
 }
 
+// BadgeAlignment is where an item's badge sits in the column the badges of
+// its menu share.
+type BadgeAlignment string
+
+const (
+	BadgeAlignLeft   BadgeAlignment = "left"
+	BadgeAlignCenter BadgeAlignment = "center"
+	BadgeAlignRight  BadgeAlignment = "right"
+)
+
 // MenuItem is a snapshot of a menu item. ID identifies the public item the
 // native item was built from.
 type MenuItem struct {
@@ -1078,6 +1103,9 @@ type MenuItem struct {
 	Type        MenuItemType
 	Label       string
 	Subtitle    string
+	Badge       string
+	BadgeAlign  BadgeAlignment
+	KeepOpen    bool
 	Role        string
 	Accelerator string
 	Enabled     bool
@@ -1441,6 +1469,10 @@ type Tray interface {
 	Dark() bool
 	SetImage(png []byte, template bool) error
 	SetTitle(title string)
+	// SetTitleMonospaced draws the title in the system's monospaced font,
+	// every character as wide as the others, where the icon has a title
+	// (macOS).
+	SetTitleMonospaced(on bool)
 	SetToolTip(tip string)
 	SetMenu(m *Menu)
 	PopUpMenu(m *Menu)

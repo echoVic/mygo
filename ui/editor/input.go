@@ -39,9 +39,11 @@ func (ed *editor) offer(ev ui.InputEvent) bool {
 
 // retry runs fn, which edits the text as the editor shows it, again on
 // the text as it is when another goroutine edited the buffer meanwhile,
-// rather than leaving the edit out (apply).
+// rather than leaving the edit out (apply), as many times as it takes:
+// each run that comes too late found another goroutine's edit in, so the
+// buffer moves on, and a letter typed is never lost.
 func (ed *editor) retry(fn func() bool) bool {
-	for range 4 {
+	for {
 		ed.sync()
 		ed.stale = false
 		ok := fn()
@@ -49,7 +51,6 @@ func (ed *editor) retry(fn func() bool) bool {
 			return ok
 		}
 	}
-	return false
 }
 
 func (ed *editor) dispatch(ev ui.InputEvent) bool {

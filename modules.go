@@ -877,8 +877,10 @@ type TrayOptions struct {
 	// items each keep their place. Empty, a new icon goes left of those
 	// already there. On Windows, which places icons itself, the icon keeps
 	// whether the user shows it on the taskbar or in its overflow, as the
-	// app makes it again or makes its icons in another order. It does
-	// nothing on Linux, whose panels place icons themselves.
+	// app makes it again or makes its icons in another order. On Linux it
+	// is the icon's StatusNotifierItem ID, after the program's name, by
+	// which a panel keeps its settings for the icon, as KDE Plasma keeps
+	// whether it shows the icon or hides it.
 	ID string
 	// Icon is a PNG image, ideally 16x16 points (32x32 pixels for Retina).
 	Icon []byte
@@ -887,8 +889,14 @@ type TrayOptions struct {
 	// while the desktop prefers dark.
 	IconIsTemplate bool
 	// Title is shown next to the icon (macOS).
-	Title   string
-	ToolTip string
+	Title string
+	// MonospacedTitle draws the title in the system's monospaced font
+	// (macOS), where every character is as wide as the others: a title of
+	// a fixed number of characters keeps its width whatever they are, as a
+	// rate whose unit changes ("60K", then "1.3M"). Otherwise only its
+	// digits share a width.
+	MonospacedTitle bool
+	ToolTip         string
 	// Menu is shown when the icon is clicked.
 	Menu *Menu
 }
@@ -919,7 +927,7 @@ func NewTray(opts TrayOptions) (*Tray, error) {
 	t := &Tray{menu: opts.Menu}
 	var err error
 	onMain(func() {
-		t.native, err = backend().NewTray(trayHandler{t})
+		t.native, err = backend().NewTray(opts.ID, trayHandler{t})
 		if err != nil {
 			return
 		}
@@ -930,6 +938,9 @@ func NewTray(opts TrayOptions) (*Tray, error) {
 			if err = t.native.SetImage(opts.Icon, opts.IconIsTemplate); err != nil {
 				return
 			}
+		}
+		if opts.MonospacedTitle {
+			t.native.SetTitleMonospaced(true)
 		}
 		if opts.Title != "" {
 			t.native.SetTitle(opts.Title)
@@ -969,7 +980,9 @@ func (t *Tray) SetIcon(png []byte, template bool) error {
 // the same width, so a number that changes, such as a rate, keeps the
 // item's width as long as the text keeps its length: pad the value to a
 // fixed number of characters with figure spaces (U+2007), as wide as a
-// digit, rather than ordinary spaces.
+// digit, rather than ordinary spaces. Letters and punctuation keep their
+// own widths, so text that changes them changes the item's width, unless
+// the tray was made with TrayOptions.MonospacedTitle.
 func (t *Tray) SetTitle(title string) { t.do(func(n platform.Tray) { n.SetTitle(title) }) }
 
 // SetToolTip sets the hover text.

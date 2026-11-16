@@ -1825,6 +1825,11 @@ func NativeView(c *Context, v PlatformView) Element {
 	return wrapElement(_e)
 }
 
+// NewRecorder returns a Recorder of view, in frames of the size o gives.
+func NewRecorder(view func(c *Context), o RecorderOptions) *Recorder {
+	return coreNewRecorder(func(c *context) { view(makeContext(c)) }, o)
+}
+
 // NewTester starts testing view in a window of width×height DIPs. Two
 // elements given one key under one parent make it panic where the second
 // was given, as apps only log it.
@@ -1865,12 +1870,13 @@ func NumberInput(c *Context, value *float64, lo float64, hi float64, step float6
 // children's children with Option (Alt). row builds the content of an
 // item's row, after its arrow; Gap, Padding and the rest are a List's.
 //
-// The outline builds only the rows in view, as a List does, so trees of
-// any size are as fast as small ones. With s.List.Selected or Selection,
-// rows are chosen as a List's, and while the outline has the focus, Right
-// opens the item chosen or goes to its first child, and Left closes it or
-// goes to its parent, with Option on macOS and Shift elsewhere, as in GTK,
-// opening and closing all inside.
+// The outline builds only the rows in view, as a List does. It walks the
+// open items in every frame, unless s.Generation tells it when children
+// changes, which keeps trees of any size as fast as small ones. With
+// s.List.Selected or Selection, rows are chosen as a List's, and while
+// the outline has the focus, Right opens the item chosen or goes to its
+// first child, and Left closes it or goes to its parent, with Option on
+// macOS and Shift elsewhere, as in GTK, opening and closing all inside.
 //
 //	app.files.List.Selected = &app.file
 //	ui.Outline(c, &app.files, []string{"/"}, func(dir string) []string {
@@ -3434,6 +3440,24 @@ func (_handle Element) Access(fn func(n *platform.AccessNode)) Element {
 	return wrapElement(_node.Access(fn))
 }
 
+// AccessChildren has fn add nodes of its own inside the element's, after
+// Access's fn described it and before the elements inside it, only while
+// assistive technology reads the window: what stands for parts of the
+// element that are no elements, as the lines a diff viewer shows, each
+// read as added or deleted. fn reads the element's node, parent, and adds
+// each node with add, whose Parent it sets; their IDs must be no
+// element's, and the same for the same part from frame to frame. Actions
+// on them do nothing. As Access, it takes the module's internal type.
+func (_handle Element) AccessChildren(fn func(parent *platform.AccessNode, add func(arg0 platform.AccessNode))) Element {
+	_node := _handle.node()
+	if _node == nil {
+		return Element{}
+	}
+	_ctx := _node.c
+	_ = _ctx
+	return wrapElement(_node.AccessChildren(fn))
+}
+
 // AccessDisabled tells assistive technology that the element and those
 // inside it are unavailable when off is true, as HTML's aria-disabled
 // does, while they keep the keyboard focus, their place in the Tab order,
@@ -4095,26 +4119,35 @@ func (_handle Element) Busy(on bool) Element {
 // as a card of gradients, blurred images and large shadows, under or
 // around a drawing that moves. A frame redrawing where something above or
 // next to it changed then draws the bitmap there, not each of its layers,
-// and moving, scaling or rotating the element (Translate, Scale, Rotate,
-// AnimatePose) moves the bitmap, not what it holds.
+// and moving or rotating the element (Translate, Rotate, AnimatePose)
+// moves the bitmap, not what it holds.
 //
-// The bitmap is the size of the element's box at the window's scale, and
-// of what it and those inside it paint around it: shadows, focus rings,
-// and children beyond the box that it does not clip, as Draw callbacks
-// paint (within the box and the shadows' reach). It is drawn again when
-// what the subtree paints changes: built anew with other content, laid
-// out at another size, at another scale or in another theme, or as
-// something inside it moves on its own (Painter.AnimationFrame, a pose,
-// a transition), as then it is every frame. Painting the window still
-// paints the subtree, to tell; frames that only paint the drawings that
-// asked for them (Painter.AnimationFrame, Painter.After) do not.
+// The bitmap holds the element's box, and what it and those inside it
+// paint around it: shadows, focus rings, and children beyond the box that
+// it does not clip, as Draw callbacks paint (within the box and the
+// shadows' reach), in the pixels it shows on: at the window's scale times
+// the scale the element's transform draws it at (Scale, AnimatePose,
+// Transition's ScaleContent), so that scaled up it is as sharp as the
+// subtree laid out larger. At rest it is drawn at that scale itself, on
+// whole pixels where the transform only scales and moves it; while the
+// scale changes, as an animation grows it, at steps of about 9% (at or
+// above the scale), drawn again only as the scale crosses one, and once
+// more at the scale itself in the frame after it stops. It is drawn
+// again, too, when what the subtree paints changes: built anew with other
+// content, laid out at another size, at another window scale or in
+// another theme, or as something inside it moves on its own
+// (Painter.AnimationFrame, a pose, a transition), as then it is every
+// frame. Painting the window still paints the subtree, to tell; frames
+// that only paint the drawings that asked for them
+// (Painter.AnimationFrame, Painter.After) do not.
 //
 // As in an effect's bitmap (Effect), its text is smoothed in grayscale
 // where the subtree paints no opaque background under it, web views
 // inside it do not show, and a subtree larger than 8192 pixels across is
-// drawn as it is. The bitmap is drawn at the window's scale, so that
-// turned, or scaled up by a transform, it shows a little softer than the
-// shapes it holds would.
+// drawn as it is. A bitmap drawn larger than the window's scale is at
+// most 4096 pixels across, and 8 times the window's scale: beyond, it is
+// stretched as before. Turned, skewed or in perspective, the bitmap is
+// resampled, and shows a little softer than the shapes it holds would.
 func (_handle Element) Cache() Element {
 	_node := _handle.node()
 	if _node == nil {
@@ -6920,14 +6953,19 @@ func (_handle Element) PointerPosition() (float32, float32, bool) {
 // look, for items of a layout of one's own.
 //
 // PopoverMenuButton draws the menu of a menu button so.
-func (_handle Element) PopoverMenu(build func(m *Menu)) Element {
+//
+// Its options style the panel of the menu and of its submenus, and the
+// rows of their items, as a menu button's (PopoverMenuOptions): a context
+// menu that unfolds from where it opened, as the app's drawn menu buttons
+// do.
+func (_handle Element) PopoverMenu(build func(m *Menu), options ...PopoverMenuOptions) Element {
 	_node := _handle.node()
 	if _node == nil {
 		return Element{}
 	}
 	_ctx := _node.c
 	_ = _ctx
-	return wrapElement(_node.PopoverMenu(build))
+	return wrapElement(_node.PopoverMenu(build, options...))
 }
 
 // PopoverMenuButton makes the element a menu button, as Menu does, whose
@@ -8327,6 +8365,40 @@ func (_handle Element) TopPercent(p float32) Element {
 	return wrapElement(_node.TopPercent(p))
 }
 
+// Touches returns the fingers on a touchscreen that landed on the element
+// or on an element inside it, every one down and those that lifted or
+// were canceled since the last build, in the order they landed, unless the
+// element is disabled. Each keeps its ID for as long as it touches, so that
+// a view tells them apart and recognizes gestures of its own, as a
+// whiteboard turning the page as four fingers swipe or clearing it as five
+// tap:
+//
+//	for _, t := range canvas.Touches() {
+//		switch t.Phase {
+//		case ui.TouchBegan, ui.TouchMoved:
+//			strokes.Draw(t.ID, t.X, t.Y)
+//		case ui.TouchEnded, ui.TouchCanceled:
+//			strokes.End(t.ID)
+//		}
+//	}
+//
+// The fingers still do what they do without it, which apps that do not ask
+// see alone: a tap clicks, one finger scrolls, two pinch. The window
+// follows its fingers once a view asks: those down before, and lifting
+// later, are not told of. Windows, Linux and browsers report touches;
+// macOS has no touchscreens, and a trackpad's fingers, which are not points
+// on the screen, report none. Elements asking for them get a frame
+// whenever a finger lands, moves or lifts.
+func (_handle Element) Touches() []Touch {
+	_node := _handle.node()
+	if _node == nil {
+		return nil
+	}
+	_ctx := _node.c
+	_ = _ctx
+	return _node.Touches()
+}
+
 // TrackLines keeps in l where the text area lays out its lines.
 func (_handle Element) TrackLines(l *TextLines) Element {
 	_node := _handle.node()
@@ -8476,7 +8548,8 @@ func (_handle Element) TranslateZ(z float32) Element {
 // cuts in the middle of its last line rather than at its end, so that it
 // keeps both its start and its end, about as wide each, in the room
 // layout gives it: a list of files shows "src/components/…/picker.go",
-// whose folder and file's name both show.
+// whose folder and file's name both show. TruncateStart, with it, cuts
+// the start instead.
 func (_handle Element) TruncateMiddle() Element {
 	_node := _handle.node()
 	if _node == nil {
@@ -8485,6 +8558,22 @@ func (_handle Element) TruncateMiddle() Element {
 	_ctx := _node.c
 	_ = _ctx
 	return wrapElement(_node.TruncateMiddle())
+}
+
+// TruncateStart puts the ellipsis of text that SingleLine or MaxLines
+// cuts at the start of its last line rather than at its end, so that it
+// keeps as much of its end as fits the room layout gives it: a list of
+// files shows "…/theme/picker.go", whose file's name and nearest folders
+// show where its start does not matter. With TruncateMiddle too, the
+// start is cut.
+func (_handle Element) TruncateStart() Element {
+	_node := _handle.node()
+	if _node == nil {
+		return Element{}
+	}
+	_ctx := _node.c
+	_ = _ctx
+	return wrapElement(_node.TruncateStart())
 }
 
 // Underline underlines text.

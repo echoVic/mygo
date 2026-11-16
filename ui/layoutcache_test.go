@@ -76,7 +76,8 @@ var lcStyles = [][]func(e *node){
 		func(e *node) { e.ClipInsetPercent(0, 30, 0, 0, 4) }, func(e *node) { e.MaskLinearGradient(LinearGradient{From: RGB(0, 0, 0), Angle: 90}) }},
 	{nil, func(e *node) { e.Direction(RightToLeft) }, func(e *node) { e.Direction(LeftToRight) }},
 	{nil, func(e *node) { e.MaxLines(1) }, func(e *node) { e.NoWrap() }, func(e *node) { e.SingleLine() }, func(e *node) { e.MaxLines(2).Ellipsis("~") },
-		func(e *node) { e.Balance() }, func(e *node) { e.SingleLine().TruncateMiddle() }},
+		func(e *node) { e.Balance() }, func(e *node) { e.SingleLine().TruncateMiddle() },
+		func(e *node) { e.SingleLine().TruncateStart() }},
 	{nil, func(e *node) { e.ColumnSpan(2) }, func(e *node) { e.ColumnStart(2) }, func(e *node) { e.RowStart(2).RowSpan(2) }},
 	{nil, func(e *node) { e.BorderWidth(3) }, func(e *node) { e.BorderWidth(1, 0, 6, 2) }},
 	{nil, func(e *node) { e.Top(5) }, func(e *node) { e.Left(-3) }, func(e *node) { e.End(4) },
@@ -457,7 +458,7 @@ func TestLayoutInputs(t *testing.T) {
 		"pose poseAnim poseSet poseM poseFade reposed ink noCull backface bg fill grad stripes borderC borderStyle radius " +
 		"shadows material effect effecting cache grads blur opacity opacitySet undimmed cursor paintFn hitFn objectFn styleFn paintAfterFn faces " +
 		"inputFn observeFn textClient caret takesText noIME copyData webView maximizeButton fit gray objectPos dismissed rotate label widget role " +
-		"checked expanded busy current autoComplete orient tip highlighted focusHighlights keepOpen accValue accRange hasRange accFill accStep barInset barStyle scrollBase keepScrollbars hiddenScrollbars barsFrom snap snapAlign " +
+		"checked expanded busy current autoComplete orient tip highlighted focusHighlights keepOpen accValue accRange hasRange accFill accChildren accStep barInset barStyle scrollBase keepScrollbars hiddenScrollbars barsFrom snap snapAlign " +
 		"listRow rowIndex rowsOf focusGroup groupSelects segment activeDescendant nameFrom nameJoin labelledBy focusTo " +
 		"keyShortcuts accGrid accSet " +
 		"setPos setSize choosesItems search description invalid readOnly multiline describedBy errorMessage followX sort level expandable " +

@@ -3,6 +3,7 @@ package richtext
 import (
 	"fmt"
 	"math"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -34,6 +35,19 @@ func boxOf(t *testing.T, boxes []ParagraphBox, i int) ParagraphBox {
 
 // near reports whether a and b are the same to a hundredth of a DIP.
 func near(a, b float32) bool { return math.Abs(float64(a-b)) < 0.01 }
+
+// openTester is ui.NewTester for a test that reads the document after its
+// last frame (CaretRect, VisibleParagraphs): the window stays open until
+// the test ends, as an app's does while it shows the editor. A document
+// holds its editor weakly, so that it doesn't keep a closed window's
+// alive, and once nothing uses the Tester the collector may take the
+// editor, after which the document reads as shown in none.
+func openTester(t *testing.T, view func(c *ui.Context), width, height int) *ui.Tester {
+	t.Helper()
+	tt := ui.NewTester(view, width, height)
+	t.Cleanup(func() { runtime.KeepAlive(tt) })
+	return tt
+}
 
 // ScrollBy scrolls the editor by as much as asked, as far as its text
 // goes, and reports whether it moved; before an editor showed the
@@ -153,7 +167,7 @@ func TestScrollToParagraph(t *testing.T) {
 func anchorTester(t *testing.T, doc *Document, focus bool) (tt *ui.Tester, boxes *[]ParagraphBox, at *int, room *float32) {
 	t.Helper()
 	boxes, at, room = new([]ParagraphBox), new(int), new(float32)
-	tt = ui.NewTester(func(c *ui.Context) {
+	tt = openTester(t, func(c *ui.Context) {
 		*boxes = doc.VisibleParagraphs()
 		EditorBase(c, doc, EditorOptions{Font: ui.Font{Size: 10}, Space: func(p int) float32 {
 			if p == *at {
@@ -285,7 +299,7 @@ func TestScrollAnchorAtTop(t *testing.T) {
 	doc := longDoc(200)
 	var boxes []ParagraphBox
 	var room float32
-	tt := ui.NewTester(func(c *ui.Context) {
+	tt := openTester(t, func(c *ui.Context) {
 		boxes = doc.VisibleParagraphs()
 		EditorBase(c, doc, EditorOptions{Font: ui.Font{Size: 10}, Space: func(p int) float32 {
 			if p == 1 {

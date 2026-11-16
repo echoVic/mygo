@@ -767,6 +767,9 @@ type state struct {
 	// paints into the layer at once rather than flat first (checkFlat).
 	effectLayer *Canvas
 	grouped     bool
+	// scales are the scales its text and its layer rasterized at, once a
+	// transform scaled them (glyphSpace, layerScale).
+	scales *scaleWatches
 	// ink is what the element and those inside it painted into its layer
 	// in frame inkFrame, in its own space, and lastInk what they painted
 	// in a frame before (keepInk): the layer of a frame holds lastInk, as

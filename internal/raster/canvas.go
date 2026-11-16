@@ -13,6 +13,7 @@ import (
 type canvasScratch struct {
 	image Image
 	diff  scene.Differ
+	rs    []renderer
 }
 
 // drawCanvases draws into their pixels the canvases s draws anew or shows,
@@ -32,10 +33,19 @@ func (r *Renderer) drawCanvases(s *scene.Scene) {
 		scratch.image.Resize(c.W, c.H)
 		scratch.diff.Reach = 1
 		scratch.diff.Diff(cs)
-		// Effects and folded ops may retain their input images. Keep that
-		// drawing state local, as before, rather than extending the lifetime
-		// of discarded canvases through the window's drawer.
-		var d drawer
+		// Effects and folded ops stay local. Reuse only the band renderers'
+		// scratch, dropping their scene and image references after the draw.
+		d := drawer{rs: scratch.rs}
+		defer func() {
+			for i := range d.rs {
+				r := &d.rs[i]
+				r.s, r.dst, r.blurred = nil, nil, nil
+				// Popped clips remain in the backing array and can own masks.
+				clear(r.clips[:cap(r.clips)])
+				r.clips = r.clips[:0]
+			}
+			scratch.rs = d.rs
+		}()
 		d.draw(&scratch.image, cs, image.Rect(0, 0, c.W, c.H), scratch.diff.Bounds())
 		if len(c.Pix) != 4*c.W*c.H {
 			c.Pix = make([]byte, 4*c.W*c.H)

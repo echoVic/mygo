@@ -177,8 +177,11 @@ ui.Column(c).Padding(18).Gap(12).Radius(10).
   other content, another size, the window's scale or theme. A still card
   of gradients, blurred images and large shadows around a drawing that
   moves then costs one image wherever a frame redraws over it, and
-  turning or scaling the element with a transform moves the bitmap
-  without drawing it again. The bitmap holds the box, its shadows and
+  moving or turning the element with a transform moves the bitmap
+  without drawing it again. Scaled by a transform, the bitmap is drawn
+  for the pixels it shows on, so that its text stays sharp: at the scale
+  itself at rest, and at steps of about 9% while an animation scales it.
+  The bitmap holds the box, its shadows and
   children beyond it that it does not clip; text over no opaque
   background of the subtree's own is smoothed in grayscale, as in a blur.
   With `Blur` or an effect, their bitmap is the one kept.

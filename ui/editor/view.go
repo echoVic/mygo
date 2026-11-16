@@ -1453,10 +1453,16 @@ func (v *view) dispAt(l *lineLayout, r *rowLayout, x float32) int {
 	}
 	// The end of a row a line wraps after is the start of the next, where
 	// a caret shows: on this row, it is before the row's last character,
-	// as Zed clips there.
+	// as Zed clips there, before the marks of that character too.
 	if d >= r.to && r.to < len(l.disp) && r.to > r.from {
-		_, size := utf8.DecodeLastRuneInString(l.disp[r.from:r.to])
-		d = r.to - size
+		d = r.to
+		for d > r.from {
+			c, size := utf8.DecodeLastRuneInString(l.disp[r.from:d])
+			d -= size
+			if !extends(c) {
+				break
+			}
+		}
 	}
 	return d
 }

@@ -41,6 +41,7 @@ type Backend struct {
 	noSession        bool // SetNoSessionState
 	windows          []*Window
 	trayIDs          []string
+	trayMonospaced   int
 	trays            []*tray
 	trayDark         bool
 	appMenu          *platform.Menu
@@ -398,7 +399,7 @@ func (b *Backend) Applications() ([]platform.Application, error) {
 	return append([]platform.Application(nil), Apps...), nil
 }
 
-func (b *Backend) NewTray(h platform.TrayHandler) (platform.Tray, error) {
+func (b *Backend) NewTray(_ string, h platform.TrayHandler) (platform.Tray, error) {
 	t := &tray{b: b, h: h}
 	b.mu.Lock()
 	b.trays = append(b.trays, t)
@@ -426,6 +427,14 @@ func (b *Backend) TrayIDs() []string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return append([]string(nil), b.trayIDs...)
+}
+
+// MonospacedTrayTitles returns how many tray icons were asked to draw
+// their title in the monospaced font.
+func (b *Backend) MonospacedTrayTitles() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.trayMonospaced
 }
 
 func (b *Backend) RegisterHotkey(id int, acc, description string) error {
@@ -567,6 +576,7 @@ type Window struct {
 	bounds    platform.Rect
 	visible   bool
 	focused   bool
+	radius    float64 // SetCornerRadius
 	minimized bool
 	maximized bool
 	full      bool
@@ -768,11 +778,29 @@ func (w *Window) framesOnShow() {
 	}
 }
 
-func (w *Window) Hide()                           { w.mu.Lock(); w.visible = false; w.mu.Unlock() }
-func (w *Window) IsVisible() bool                 { w.mu.Lock(); defer w.mu.Unlock(); return w.visible }
-func (w *Window) Focus()                          { w.H.Focused() }
-func (w *Window) Blur()                           { w.H.Blurred() }
-func (w *Window) IsFocused() bool                 { w.mu.Lock(); defer w.mu.Unlock(); return w.focused }
+func (w *Window) Hide()           { w.mu.Lock(); w.visible = false; w.mu.Unlock() }
+func (w *Window) IsVisible() bool { w.mu.Lock(); defer w.mu.Unlock(); return w.visible }
+func (w *Window) Focus()          { w.H.Focused() }
+func (w *Window) Blur()           { w.H.Blurred() }
+func (w *Window) IsFocused() bool { w.mu.Lock(); defer w.mu.Unlock(); return w.focused }
+
+// CornerRadius is the frameless window's WindowOptions.CornerRadius, as
+// macOS rounds it, or SetCornerRadius's.
+func (w *Window) CornerRadius() float64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.radius != 0 {
+		return w.radius
+	}
+	if w.Opts != nil && w.Opts.Frameless {
+		return float64(w.Opts.CornerRadius)
+	}
+	return 0
+}
+
+// SetCornerRadius makes CornerRadius r, as a system that rounds the window.
+func (w *Window) SetCornerRadius(r float64) { w.mu.Lock(); w.radius = r; w.mu.Unlock() }
+
 func (w *Window) Minimize()                       { w.mu.Lock(); w.minimized = true; w.mu.Unlock(); w.H.Minimized() }
 func (w *Window) IsMinimized() bool               { w.mu.Lock(); defer w.mu.Unlock(); return w.minimized }
 func (w *Window) Maximize()                       { w.mu.Lock(); w.maximized = true; w.mu.Unlock(); w.H.Maximized() }
@@ -1486,6 +1514,14 @@ func (t *tray) SetID(id string) {
 	t.b.trayIDs = append(t.b.trayIDs, id)
 	t.b.mu.Unlock()
 }
+func (t *tray) SetTitleMonospaced(on bool) {
+	if on {
+		t.b.mu.Lock()
+		t.b.trayMonospaced++
+		t.b.mu.Unlock()
+	}
+}
+
 func (*tray) SetImage([]byte, bool) error { return nil }
 func (*tray) SetTitle(string)             {}
 func (*tray) SetToolTip(string)           {}

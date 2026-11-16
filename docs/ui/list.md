@@ -306,8 +306,10 @@ ui.List(c, &app.list, len(app.chats), func(i int) {
 ```
 
 It is called as the rows in view come near the end, not in every frame while
-they stay there, and again once they left it or the rows changed in number,
-as when a page was added. Only the user's scrolling calls it: `ScrollTo`,
+they stay there. Once they left it, or the rows changed in number, as when a
+page was added, the user's next scroll near the end calls it again: a page
+arriving does not call it by itself, so a list never loads page after page
+on its own. Only the user's scrolling calls it: `ScrollTo`,
 `ScrollIntoView` and `ScrollToEnd` (a notification opening a message far
 down, say), the list showing first, being resized or built at another
 height, and rows sorted again do not. A list whose first page does not fill

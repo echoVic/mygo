@@ -3,6 +3,8 @@ package ui
 import (
 	"fmt"
 	"testing"
+
+	"golang.org/x/image/font/gofont/gomono"
 )
 
 // TestTwoTestersInParallel runs Testers on different goroutines, as
@@ -28,5 +30,27 @@ func TestTwoTestersInParallel(t *testing.T) {
 				tt.Frame()
 			}
 		})
+	}
+}
+
+// A Tester's window, which shapes text in a system of its own, draws the
+// fonts the app registered, as the app's windows do. Go Mono is
+// monospaced, so "iiiiiiii" is as wide as "mmmmmmmm" only in it.
+func TestATesterDrawsRegisteredFonts(t *testing.T) {
+	const family = "MyGo Test Tester Mono"
+	if err := RegisterFont(gomono.TTF, family); err != nil {
+		t.Fatal(err)
+	}
+	tt := NewTester(func(c *Context) {
+		Column(c).Children(func() {
+			for _, s := range []string{"iiiiiiii", "mmmmmmmm"} {
+				Row(c).Children(func() { Text(c, s).Font(family).FontSize(20) })
+			}
+		})
+	}, 400, 300)
+	i, _ := tt.Find("iiiiiiii")
+	m, _ := tt.Find("mmmmmmmm")
+	if i.W < m.W-0.5 || i.W > m.W+0.5 {
+		t.Fatalf("the registered font isn't drawn: %v wide, %v in Go Mono", i.W, m.W)
 	}
 }

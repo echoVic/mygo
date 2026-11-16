@@ -182,6 +182,12 @@ type ListState struct {
 	// the theme's Radius, as a List's are, rather than leaving them square
 	// from edge to edge.
 	RoundRows bool
+	// RowHeight, when above 0, is the height of every row of a Table, as
+	// AppKit's rowHeight: the cells hold their content in the middle,
+	// without the padding above and below that keeps a row at least the
+	// theme's Space(8), so a dense table, as a source control client's or
+	// a log's, shows more rows. The header keeps the theme's height.
+	RowHeight float32
 	// HeaderMenu, when set, gives a Table's header a context menu, built
 	// as ContextMenu's is: col is the index of the column clicked in the
 	// columns given to Table, not in the order the user moved them into,
@@ -204,10 +210,11 @@ type ListState struct {
 	// drag) brought the rows in view within NearEnd rows of the end, with
 	// the last row in view: load more rows there, off the UI thread, and the
 	// frames after show them. It is called as the rows in view come near the
-	// end, not again while they stay there, and again once they left it or
-	// the rows changed in number, as when a page loaded. ScrollTo,
-	// ScrollIntoView and ScrollToEnd, the list showing first, being resized
-	// or rows coming and going do not call it, nor do rows sorted again.
+	// end, not again while they stay there. Once they left it, or the rows
+	// changed in number, as when a page loaded, the user's next scroll near
+	// the end calls it again: rows coming and going do not call it by
+	// themselves, nor do ScrollTo, ScrollIntoView and ScrollToEnd, the list
+	// showing first, being resized or rows sorted again.
 	EndReached func(last int)
 	// NearEnd is how many rows before the last count as near the end for
 	// EndReached: 0 for the last row alone.
