@@ -195,15 +195,18 @@ func (c clipboard) ReadImage() []byte {
 	if data := clipboardData(cfPNG); len(data) > 0 {
 		return data
 	}
-	img := dibToImage(clipboardData(cfDIB))
-	if img == nil {
-		return nil
+	// CF_DIBV5 can carry alpha, which CF_DIB cannot; Windows converts
+	// between the two, so either one is there when a bitmap is.
+	for _, id := range []uint32{cfDIBV5, cfDIB} {
+		if img := dibToImage(clipboardData(id)); img != nil {
+			var buf bytes.Buffer
+			if png.Encode(&buf, img) != nil {
+				return nil
+			}
+			return buf.Bytes()
+		}
 	}
-	var buf bytes.Buffer
-	if png.Encode(&buf, img) != nil {
-		return nil
-	}
-	return buf.Bytes()
+	return nil
 }
 
 func (c clipboard) WriteImage(data []byte) error {
@@ -212,6 +215,16 @@ func (c clipboard) WriteImage(data []byte) error {
 	}
 	return c.WriteData(transfer.New(transfer.NewItem(transfer.Bytes(transfer.PNG, data))), false, nil)
 }
+
+// Bitmap headers: BITMAPINFOHEADER, 40 bytes, and BITMAPV5HEADER, 124.
+// Headers from BITMAPV3INFOHEADER's 56 bytes on have the alpha mask at 52.
+const (
+	dibHeaderSize   = 40
+	dibV5HeaderSize = 124
+	biBitfields     = 3
+	lcsSRGB         = 0x73524742 // 'sRGB'
+	lcsGMImages     = 4
+)
 
 // dibToImage decodes an uncompressed 24 or 32-bit device independent
 // bitmap.
@@ -230,9 +243,12 @@ func dibToImage(dib []byte) image.Image {
 	if offset < 40 || offset > len(dib) {
 		return nil
 	}
-	if compression == 3 && headerSize == 40 {
+	if compression == biBitfields && headerSize == dibHeaderSize {
 		offset += 12 // BI_BITFIELDS masks
 	}
+	// Pixels have alpha when the header has an alpha mask. In a
+	// BITMAPINFOHEADER the fourth byte is reserved, and often zero.
+	alpha := bits == 32 && headerSize >= 56 && le.Uint32(dib[52:]) != 0
 	bottomUp := height > 0
 	if !bottomUp {
 		height = -height
@@ -248,6 +264,7 @@ func dibToImage(dib []byte) image.Image {
 	}
 	img := image.NewNRGBA(image.Rect(0, 0, width, height))
 	px := int(bits / 8)
+	seen := false
 	for y := 0; y < height; y++ {
 		row := y
 		if bottomUp {
@@ -257,31 +274,64 @@ func dibToImage(dib []byte) image.Image {
 		for x := 0; x < width; x++ {
 			p := line[x*px:]
 			a := uint8(255)
-			if bits == 32 && headerSize > 40 {
+			if alpha {
 				a = p[3]
+				seen = seen || a != 0
 			}
 			img.SetNRGBA(x, y, color.NRGBA{R: p[2], G: p[1], B: p[0], A: a})
+		}
+	}
+	// Alpha zero everywhere is an app that left it unset, not an image
+	// nobody can see.
+	if alpha && !seen {
+		for i := 3; i < len(img.Pix); i += 4 {
+			img.Pix[i] = 255
 		}
 	}
 	return img
 }
 
-// imageToDIB encodes a top-down 32-bit BITMAPINFOHEADER bitmap.
+// imageToDIB encodes a bottom-up 32-bit BITMAPINFOHEADER bitmap of img on
+// white. Apps that read CF_DIB ignore the fourth byte, so transparent
+// pixels would show whatever color they hold, often black.
 func imageToDIB(img image.Image) []byte {
+	return encodeDIB(img, dibHeaderSize, func(c color.NRGBA) color.NRGBA {
+		// Straight alpha over white: c·a + 255·(1−a), rounded.
+		over := func(v uint8) uint8 { return uint8((int(v)*int(c.A) + 255*(255-int(c.A)) + 127) / 255) }
+		return color.NRGBA{R: over(c.R), G: over(c.G), B: over(c.B), A: 255}
+	})
+}
+
+// imageToDIBV5 encodes a bottom-up 32-bit BITMAPV5HEADER bitmap with
+// straight alpha, in sRGB, for apps that read transparency from CF_DIBV5.
+func imageToDIBV5(img image.Image) []byte {
+	return encodeDIB(img, dibV5HeaderSize, func(c color.NRGBA) color.NRGBA { return c })
+}
+
+func encodeDIB(img image.Image, headerSize int, pixel func(color.NRGBA) color.NRGBA) []byte {
 	b := img.Bounds()
 	w, h := b.Dx(), b.Dy()
-	out := make([]byte, 40+4*w*h)
+	out := make([]byte, headerSize+4*w*h)
 	le := binary.LittleEndian
-	le.PutUint32(out, 40)
+	le.PutUint32(out, uint32(headerSize))
 	le.PutUint32(out[4:], uint32(w))
-	le.PutUint32(out[8:], uint32(int32(-h)))
+	le.PutUint32(out[8:], uint32(h))
 	le.PutUint16(out[12:], 1)
 	le.PutUint16(out[14:], 32)
 	le.PutUint32(out[20:], uint32(4*w*h))
-	i := 40
-	for y := b.Min.Y; y < b.Max.Y; y++ {
+	if headerSize == dibV5HeaderSize {
+		le.PutUint32(out[16:], biBitfields)
+		le.PutUint32(out[40:], 0x00ff0000) // red
+		le.PutUint32(out[44:], 0x0000ff00) // green
+		le.PutUint32(out[48:], 0x000000ff) // blue
+		le.PutUint32(out[52:], 0xff000000) // alpha
+		le.PutUint32(out[56:], lcsSRGB)
+		le.PutUint32(out[108:], lcsGMImages)
+	}
+	i := headerSize
+	for y := b.Max.Y - 1; y >= b.Min.Y; y-- {
 		for x := b.Min.X; x < b.Max.X; x++ {
-			c := color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA)
+			c := pixel(color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA))
 			out[i], out[i+1], out[i+2], out[i+3] = c.B, c.G, c.R, c.A
 			i += 4
 		}
