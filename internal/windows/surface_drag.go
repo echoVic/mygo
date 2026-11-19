@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"image"
-	"image/png"
 	"slices"
 	"strings"
 	"syscall"
@@ -393,13 +392,10 @@ func setTransferProviders(d *dragDataObject, data transfer.Data, session string)
 				// alpha first, then CF_DIB and CF_BITMAP, which have none,
 				// on white. Without a CF_BITMAP of its own, Windows would
 				// make one from CF_DIBV5 and show transparent pixels black.
-				bitmap := func(encode func(image.Image) []byte) func() ([]byte, error) {
+				decoded := &decodedPNG{read: func() ([]byte, error) { return data.Read(transfer.PNG) }}
+				bitmap := func(encode func(*image.NRGBA) []byte) func() ([]byte, error) {
 					return func() ([]byte, error) {
-						b, err := data.Read(transfer.PNG)
-						if err != nil {
-							return nil, err
-						}
-						img, err := png.Decode(bytes.NewReader(b))
+						img, err := decoded.image()
 						if err != nil {
 							return nil, err
 						}

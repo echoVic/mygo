@@ -221,6 +221,18 @@ func TestClipboardDIBAlpha(t *testing.T) {
 	if img, ok := dibToImage(noMask).(*image.NRGBA); !ok || img.NRGBAAt(0, 0).A != 255 {
 		t.Fatal("a bitmap without an alpha mask read as transparent")
 	}
+	// The masks count only with BI_BITFIELDS, and only BGRA's are read.
+	rgb := slices.Clone(v5)
+	binary.LittleEndian.PutUint32(rgb[16:], 0)
+	if img, ok := dibToImage(rgb).(*image.NRGBA); !ok || img.NRGBAAt(1, 0).A != 255 {
+		t.Fatal("the alpha mask of a BI_RGB bitmap read")
+	}
+	swapped := slices.Clone(v5)
+	binary.LittleEndian.PutUint32(swapped[40:], 0x000000ff)
+	binary.LittleEndian.PutUint32(swapped[48:], 0x00ff0000)
+	if img, ok := dibToImage(swapped).(*image.NRGBA); !ok || img.NRGBAAt(1, 0).A != 255 {
+		t.Fatal("alpha read with masks that are not BGRA's")
+	}
 	blank := imageToDIBV5(image.NewNRGBA(image.Rect(0, 0, 2, 2)))
 	if img, ok := dibToImage(blank).(*image.NRGBA); !ok || img.NRGBAAt(1, 1).A != 255 {
 		t.Fatal("a bitmap with no alpha anywhere read as transparent")
@@ -261,4 +273,145 @@ func TestClipboardReadImageFromDIBV5(t *testing.T) {
 	if got := color.NRGBAModel.Convert(img.At(1, 0)); got != src.NRGBAAt(1, 0) {
 		t.Fatalf("pixel %v, want %v", got, src.NRGBAAt(1, 0))
 	}
+}
+
+// fillClipboard gives the clipboard an owner and what fill puts on it, for
+// the test's duration.
+func fillClipboard(t *testing.T, fill func() bool) clipboard {
+	t.Helper()
+	runtime.LockOSThread()
+	t.Cleanup(runtime.UnlockOSThread)
+	hwnd := createWindow(0, "STATIC", "", 0, 0, 0, 0, 0, 0)
+	if hwnd == 0 {
+		t.Fatal("cannot create the clipboard's owner")
+	}
+	t.Cleanup(func() { procDestroyWindow.Call(hwnd) })
+	c := clipboard{&Backend{appHwnd: hwnd}}
+	if !c.open() {
+		t.Fatal("cannot open the clipboard")
+	}
+	procEmptyClipboard.Call()
+	filled := fill()
+	closeClipboard()
+	t.Cleanup(func() {
+		if c.open() {
+			procEmptyClipboard.Call()
+			closeClipboard()
+		}
+	})
+	if !filled {
+		t.Fatal("cannot fill the clipboard")
+	}
+	return c
+}
+
+// readClipboardImages returns the clipboard's image as ReadImage and as
+// ReadData read it, decoded.
+func readClipboardImages(t *testing.T, c clipboard) (fromImage, fromData image.Image) {
+	t.Helper()
+	fromImage, err := png.Decode(bytes.NewReader(c.ReadImage()))
+	if err != nil {
+		t.Fatalf("ReadImage: %v", err)
+	}
+	d, err := c.ReadData([]transfer.Format{transfer.PNG})
+	if err != nil {
+		t.Fatalf("ReadData: %v", err)
+	}
+	b, _ := d.Read(transfer.PNG)
+	if fromData, err = png.Decode(bytes.NewReader(b)); err != nil {
+		t.Fatalf("ReadData: %v", err)
+	}
+	return fromImage, fromData
+}
+
+// PrintScreen leaves a CF_BITMAP, of which Windows makes CF_DIB and
+// CF_DIBV5. Its pixels are read where they are and opaque: Windows' CF_DIBV5
+// has masks before its pixels, and the fourth bytes of a device-dependent
+// bitmap are no alpha.
+func TestClipboardReadsGDIBitmap(t *testing.T) {
+	src := image.NewNRGBA(image.Rect(0, 0, 8, 4))
+	for y := range 4 {
+		for x := range 8 {
+			src.SetNRGBA(x, y, color.NRGBA{R: uint8(200 - x*10), G: uint8(y*50 + 5), B: uint8(x*30 + 7), A: []uint8{0, 255, 128}[x%3]})
+		}
+	}
+	dib := encodeDIB(src, dibHeaderSize, func(c color.NRGBA) color.NRGBA { return c })
+	c := fillClipboard(t, func() bool {
+		dc, _, _ := procGetDC.Call(0)
+		defer procReleaseDC.Call(0, dc)
+		header := uintptr(unsafe.Pointer(&dib[0]))
+		bmp, _, _ := procCreateDIBitmap.Call(dc, header, cbmInit, uintptr(unsafe.Pointer(&dib[dibHeaderSize])), header, 0)
+		if bmp == 0 {
+			return false
+		}
+		r, _, _ := procSetClipboardData.Call(cfBitmap, bmp)
+		return r != 0
+	})
+	fromImage, fromData := readClipboardImages(t, c)
+	for name, img := range map[string]image.Image{"ReadImage": fromImage, "ReadData": fromData} {
+		if img.Bounds() != src.Rect {
+			t.Fatalf("%s: bounds %v, want %v", name, img.Bounds(), src.Rect)
+		}
+		for y := range 4 {
+			for x := range 8 {
+				want := src.NRGBAAt(x, y)
+				want.A = 255
+				if got := color.NRGBAModel.Convert(img.At(x, y)); got != want {
+					t.Fatalf("%s: pixel (%d, %d) is %v, want %v", name, x, y, got, want)
+				}
+			}
+		}
+	}
+}
+
+// ReadImage and ReadData read the same bitmap, the one the clipboard's
+// owner put first, whose alpha only CF_DIBV5 has.
+func TestClipboardBitmapReadersAgree(t *testing.T) {
+	src := alphaTestImage()
+	bitmaps := map[uint32][]byte{cfDIBV5: imageToDIBV5(src), cfDIB: imageToDIB(src)}
+	for _, tc := range []struct {
+		name   string
+		order  []uint32
+		second color.NRGBA // the half transparent red pixel
+	}{
+		{"CF_DIBV5 first", []uint32{cfDIBV5, cfDIB}, color.NRGBA{R: 255, A: 128}},
+		{"CF_DIB first", []uint32{cfDIB, cfDIBV5}, color.NRGBA{R: 255, G: 127, B: 127, A: 255}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := fillClipboard(t, func() bool {
+				return setClipboardData(tc.order[0], bitmaps[tc.order[0]]) && setClipboardData(tc.order[1], bitmaps[tc.order[1]])
+			})
+			fromImage, fromData := readClipboardImages(t, c)
+			for name, img := range map[string]image.Image{"ReadImage": fromImage, "ReadData": fromData} {
+				if got := color.NRGBAModel.Convert(img.At(1, 0)); got != tc.second {
+					t.Errorf("%s: pixel %v, want %v", name, got, tc.second)
+				}
+			}
+		})
+	}
+}
+
+// The bitmaps offered of a PNG share its decoded image while one of them
+// holds it, whatever the PNG decodes to.
+func TestDecodedPNG(t *testing.T) {
+	src := image.NewRGBA(image.Rect(0, 0, 2, 1)) // opaque: decodes to *image.RGBA
+	src.SetRGBA(0, 0, color.RGBA{R: 10, G: 20, B: 30, A: 255})
+	src.SetRGBA(1, 0, color.RGBA{R: 40, G: 50, B: 60, A: 255})
+	reads := 0
+	d := &decodedPNG{read: func() ([]byte, error) { reads++; return pngBytes(t, src), nil }}
+	img, err := d.image()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if img.NRGBAAt(0, 0) != (color.NRGBA{R: 10, G: 20, B: 30, A: 255}) || img.NRGBAAt(1, 0) != (color.NRGBA{R: 40, G: 50, B: 60, A: 255}) {
+		t.Fatalf("decoded %v", img.Pix)
+	}
+	again, err := d.image()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again != img || reads != 1 {
+		t.Fatalf("decoded %d times while the image was held", reads)
+	}
+	runtime.KeepAlive(img)
 }
