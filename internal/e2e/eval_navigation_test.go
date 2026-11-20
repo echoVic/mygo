@@ -94,6 +94,21 @@ func TestEvalAcrossNavigation(t *testing.T) {
 		}
 	})
 
+	// Listening for pagehide is best effort: a page that replaced the
+	// window's addEventListener and removeEventListener still answers.
+	t.Run("page without listeners", func(t *testing.T) {
+		w := newWindow(t, mygo.WindowOptions{Hidden: true})
+		if err := w.Page().LoadURL("app://localhost/session/one"); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, w, "document.title === 'one'")
+		mustEval(t, w, "window.addEventListener = window.removeEventListener = null, 1")
+		v, err := w.Page().Eval("new Promise(r => setTimeout(() => r(document.title)))")
+		if err != nil || v != "one" {
+			t.Errorf("Eval in a page without addEventListener = %v, %v; want one", v, err)
+		}
+	})
+
 	t.Run("closed window", func(t *testing.T) {
 		w := newWindow(t, mygo.WindowOptions{Hidden: true})
 		if err := w.Page().LoadURL("app://localhost/session/one"); err != nil {

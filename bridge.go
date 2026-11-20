@@ -160,8 +160,10 @@ const (
 	// WebKit answers for its promise only once the garbage collector takes
 	// it, which never happens while the page keeps it, as the back-forward
 	// cache keeps pages whole. So until the code answers, the page's
-	// pagehide answers that it was left.
-	evalStart = "return(async p=>{let h;try{return JSON.stringify({ok:true,v:await new Promise((ok,no)=>{addEventListener('pagehide',h=()=>no(h),true);p.then(ok,no)})})}catch(e){return JSON.stringify(e===h?{left:true}:{ok:false,e:String(e&&e.message||e)})}finally{removeEventListener('pagehide',h,true)}})((async()=>"
+	// pagehide answers that it was left. Listening is best effort: a page
+	// that replaced addEventListener or removeEventListener still gets its
+	// answers, as before.
+	evalStart = "return(async p=>{let h;try{return JSON.stringify({ok:true,v:await new Promise((ok,no)=>{try{addEventListener('pagehide',h=()=>no(h),true)}catch{}p.then(ok,no)})})}catch(e){return JSON.stringify(e===h?{left:true}:{ok:false,e:String(e&&e.message||e)})}finally{try{removeEventListener('pagehide',h,true)}catch{}}})((async()=>"
 	evalEnd   = ")())"
 	// The expression form: compile errors mean code is not an expression.
 	evalExpr = evalStart + "(\n%s\n)" + evalEnd
