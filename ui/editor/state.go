@@ -7,6 +7,10 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+// defaultScrollMargin is how many lines the editor keeps above
+// and below the caret as it reveals it, as Zed's vertical_scroll_margin.
+const defaultScrollMargin = 3
+
 // State is a code editor's state, kept by the app across
 // frames: the buffer it edits, its options, and what the editor keeps of
 // its own, as its selections, folds and scroll position. Set the options
@@ -45,6 +49,12 @@ type State struct {
 	// NoScrollPastEnd stops scrolling at the last line rather than
 	// letting it scroll up to the top.
 	NoScrollPastEnd bool
+	// ScrollMargin is how many lines to keep above and below the
+	// caret when scrolling it into view. Zero uses the default of three
+	// lines, a positive value sets that many lines, and a negative value
+	// removes the margin. The margin shrinks to fit the viewport and
+	// stops at the scroll limits.
+	ScrollMargin int
 	// NoAutoClose stops closing brackets and quotes as they are typed.
 	NoAutoClose bool
 	// NoFolding hides the fold markers of the gutter and turns folding
@@ -57,7 +67,10 @@ type State struct {
 	// underlines, as its pending operators do.
 	CursorShape CursorShape
 	// FitContent makes the editor as high as its lines, to show in a
-	// scroll view or a list, rather than scrolling them itself.
+	// scroll view or a list, rather than scrolling them itself. The
+	// containers around it scroll it: its find bar and go to line bring
+	// their text into view through them, and the bars stick to the top of
+	// the part of the text those containers show.
 	FitContent bool
 	// KeepScrollbars keeps the thumbs of the scroll bars, and the marks
 	// of the carets on the vertical one, showing while the text has
@@ -237,10 +250,17 @@ type TextBackground struct {
 }
 
 func (st *State) options() options {
+	scrollMargin := defaultScrollMargin
+	if st.ScrollMargin > 0 {
+		scrollMargin = st.ScrollMargin
+	} else if st.ScrollMargin < 0 {
+		scrollMargin = 0
+	}
 	return options{
 		readOnly: st.ReadOnly, font: st.Font, lineHeight: st.LineHeight, tabSize: st.TabSize, indent: st.Indent,
 		wrap: st.SoftWrap, wrapColumn: st.WrapColumn, lineNumbers: st.LineNumbers, whitespace: st.Whitespace,
-		wrapGuides: st.WrapGuides, indentGuides: !st.NoIndentGuides, scrollPastEnd: !st.NoScrollPastEnd && !st.FitContent,
+		wrapGuides: st.WrapGuides, indentGuides: !st.NoIndentGuides,
+		scrollPastEnd: !st.NoScrollPastEnd && !st.FitContent, scrollMargin: scrollMargin,
 		keepScrollbars: st.KeepScrollbars, hideScrollbars: st.NoScrollbars, scrollbar: st.Scrollbar,
 		autoClose: !st.NoAutoClose, folding: !st.NoFolding, activeLine: !st.NoActiveLine, cursorShape: st.CursorShape, fitContent: st.FitContent,
 		placeholder: st.Placeholder, label: st.Label, theme: st.Theme, bindings: st.Bindings, gutterMarks: st.GutterMarks,
@@ -319,11 +339,13 @@ func (st *State) Run(cmd Command) bool {
 }
 
 // GoTo puts the caret at a line and column, from 0, and scrolls it to
-// the middle of the editor.
+// the middle of the editor: an editor as high as its lines has no scroll
+// of its own, so the containers around it take the line into view.
 func (st *State) GoTo(p Pos) {
 	st.ensure()
 	off := offsetOf(st.ed.view.text, p)
 	st.ed.setSels([]sel{st.ed.newSel(off, off)}, revealCenter)
+	st.ed.askRevealNow(off)
 }
 
 // ScrollTo scrolls a line to the top of the editor.
@@ -358,6 +380,25 @@ func (st *State) ViewportHeight() float64 { return float64(st.ed.viewH) }
 func (st *State) LineTop(line int) float64 {
 	st.ensure()
 	return st.ed.view.heights.top(line)
+}
+
+// Rect returns where the caret at byte offset off shows, in DIPs from the
+// top left of the editor's box, as the last frame laid it out, and whether
+// its line shows: a line a fold hides doesn't. It is as high as a row; the
+// row of off, with SoftWrap. A hosted frame around text draws its edges
+// from the Rect of its first and last offsets, in an element's DrawOver.
+// For a line far from the view with SoftWrap, Y may be an estimate for a
+// few frames, as LineTop's is.
+func (st *State) Rect(off int) (ui.Rect, bool) {
+	st.ensure()
+	off = max(0, min(off, st.ed.view.text.Len()))
+	r, ok := st.ed.caretRect(off)
+	if !ok {
+		return ui.Rect{}, false
+	}
+	r.X += st.ed.textX - st.ed.scrollX
+	r.Y -= float32(st.ed.scrollY)
+	return r, true
 }
 
 // Find opens the find bar with query, and selects its first match after
@@ -510,6 +551,33 @@ func (st *State) SetReplacements(rs []Replacement) {
 // Replacements returns the replacements shown, where the edits since
 // moved them.
 func (st *State) Replacements() []Replacement { return slices.Clone(st.ed.view.repls) }
+
+// SetBlocks shows elements between the lines of the text, as an image
+// under the line naming it: each as high as its element is laid out, and
+// only those in view built. They move with the edits until set again, a
+// block going with its line's text. Deleting that line attaches the block
+// to the surviving line at that position, with Above unchanged.
+// Set them again as the text changes: those at the place of one shown
+// keep their elements and heights, so this is cheap in every frame.
+// Blocks of lines that don't exist are left out.
+//
+// A block on a line a replacement hides shows in place of the lines the
+// replacement covers, as a table drawn in place of its source; a fold
+// hides the blocks of its lines.
+func (st *State) SetBlocks(blocks []Block) {
+	st.ensure()
+	st.ed.setBlocks(blocks)
+}
+
+// Blocks returns the blocks shown, where the edits since moved them.
+func (st *State) Blocks() []Block {
+	st.ensure()
+	out := make([]Block, len(st.ed.view.blocks))
+	for i := range out {
+		out[i] = st.ed.view.blocks[i].Block
+	}
+	return out
+}
 
 // SetLineStyles draws lines in other fonts, as a Markdown editor's
 // headings in larger type: each line's rows are as high as its style

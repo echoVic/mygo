@@ -90,6 +90,7 @@ func webViewAttached(*mygo.Window) (bool, bool) { return false, false }
 
 // Collection behaviors and deactivating the app are macOS's.
 func collectionBehavior(*mygo.Window) (uint, bool)               { return 0, false }
+func becomesKeyOnlyIfNeeded(*mygo.Window) (bool, bool)           { return false, false }
 func deactivateApp() bool                                        { return false }
 func material(*mygo.Window) (string, int, float64, bool, bool)   { return "", 0, 0, false, false }
 func materialState(*mygo.Window) (int, bool)                     { return 0, false }
@@ -184,6 +185,13 @@ func openMenus(w *mygo.Window, letter byte) (supported bool) {
 		mygo.RunOnMain(func() { win.TestPressKeys(0x12, letter) }) // VK_MENU
 	}
 	return true
+}
+
+// inMenuLoop reports whether the window runs a menu loop, which reads the
+// keys typed from then on.
+func inMenuLoop(w *mygo.Window) (in bool) {
+	mygo.RunOnMain(func() { in = win.TestInMenuLoop(w.NativeHandle()) })
+	return in
 }
 
 // closeMenus leaves the menus, as Escape does.
@@ -357,12 +365,21 @@ func popupItemEnabled(label string) (enabled, ok bool) {
 func pressKey(*mygo.Window, uint16, string) bool { return false }
 
 func pressKeyComposing(*mygo.Window, uint16, string, string, string) bool { return false }
+func pressKeyComposingOver(*mygo.Window, uint16, string, string, string, int, int) bool {
+	return false
+}
 
 // dragFiles drags files from another application to (x, y) of a window of
 // native UI and drops them, as OLE does, waiting for the target to answer.
 func dragFiles(w *mygo.Window, x, y float64, paths []string) (dropped, ok bool) {
 	mygo.RunOnMain(func() { dropped = win.TestDragFiles(w.NativeHandle(), x, y, paths) })
 	return dropped, true
+}
+
+// OLE routes a drag to a window's drop target as a whole, whose answer does
+// not follow the pointer within it.
+func dropFilesFrom(*mygo.Window, float64, float64, float64, float64, []string) (bool, bool, bool) {
+	return false, false, false
 }
 
 // pressTab presses Tab, with Shift when back, on the keyboard, in the

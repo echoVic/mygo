@@ -81,9 +81,19 @@ as through any, and `Modified` still compares with the saved text: call
 step of the history, around a millisecond for a full one of 10,000 steps,
 whatever the size of the text.
 
-Lines end in `\n`, as in Zed: a text with `\r\n` line endings is kept with
-`\n` ones, and `LineEnding` says which it had, which `WriteTo` writes, so
-that a file saves as it was; `SetLineEnding` changes it.
+Lines end in `\n`, as in Zed: a text with `\r\n` or `\r` line endings is
+kept with `\n` ones, and the buffer remembers the ending of each line,
+which `WriteTo` writes, so that a file saves as it was, mixed endings and
+all. An edit changes only the endings of the lines it breaks or joins: a
+line broken in two, as with Enter, ends both halves as it ended, deleting
+a line break keeps the one after it, and line breaks pasted take the
+endings of those they replace, then the ending of the line they go in,
+whatever the clipboard had; moving lines up or down moves their endings
+with them. A line ending in `\r` followed by an empty line ending in `\n`
+would be written `\r\n`, which reads back as one line break, so the empty
+line's break becomes `\r\n`. Undo and redo put endings back with the text.
+`LineEnding` says which ending most lines have, and `SetLineEnding`
+converts every line to one.
 
 The text is a persistent tree of chunks, as Zed's rope: an edit copies a
 few kilobytes and a path of the tree, whatever the size of the document,
@@ -165,8 +175,11 @@ panes of a merge, and a minimap beside the editor shows where its view
 is. The scroll bars' thumbs show while the pointer is over the editor, or
 drags one, as a scroll container's do, or all the time with
 `KeepScrollbars`; the marks of changes, matches and diagnostics on the
-vertical one show all the time. `NoScrollbars` takes the bars and their
-marks away, and gives their room to the text.
+vertical one show all the time. The horizontal one shows while a line
+the editor has shown is wider than it, and goes once an edit, inlays,
+replacements or another tab size make the lines narrower, the text
+scrolling back to fit. `NoScrollbars` takes the bars and their marks
+away, and gives their room to the text.
 
 `OnInput` sees each input event before the editor does: keys, the text
 typed, edit commands and the pointer. Returning true takes the event, and
@@ -230,7 +243,10 @@ app.code.OnInput = func(ev ui.InputEvent) bool {
   hides those of indentation.
 - `ReadOnly` lets the text be selected and copied, not edited.
 - `FitContent` makes the editor as high as its lines, rather than
-  scrolling them, to show code in a scroll view or a list.
+  scrolling them, to show code in a scroll view or a list. The containers
+  around it scroll it, so its find bar and go to line bring their text
+  into view through those containers, and the bars themselves stick to
+  the top of the part of the text those containers show.
 - `KeepScrollbars` keeps the scroll bars' thumbs showing with the pointer
   away, as a scroll container's `KeepScrollbars`; `NoScrollbars` takes
   the bars away, with their room, the wheel and the keys still
@@ -253,6 +269,14 @@ app.code.OnInput = func(ev ui.InputEvent) bool {
   13 DIPs, 1.5 times as high, by default.
 - `NoAutoClose`, `NoFolding`, `NoActiveLine` and `NoScrollPastEnd` turn
   those behaviors off. `Placeholder` shows while the buffer is empty.
+- `ScrollMargin` sets how many lines to keep above and below the
+  caret when scrolling it into view. Zero uses three lines, a positive
+  value sets that many lines, and a negative value removes the margin.
+  The margin shrinks to fit the viewport and stops at the scroll limits.
+
+  ```go
+  st.ScrollMargin = -1 // no margin
+  ```
 - `CursorShape` paints carets as bars (`CursorBar`), as blocks over the
   character after them (`CursorBlock`), as Vim's normal mode does,
   translucent so that the character shows and outlined while the editor
@@ -404,6 +428,17 @@ app.code.SetDiagnostics(buf.Version(), app.lsp.Diagnostics())
   `NoDefinitionClick` leaves Cmd+click to the editor's other clicks, link
   and all, and F12 and the context menu still go to the definition;
   `NoDefinitionLink` keeps Cmd+click but shows no link.
+- `ShowPopup` shows a panel the app builds below the caret at an offset,
+  as the usages or implementations a go to finds, to choose one from. It
+  takes the keyboard as it opens, for the app's own keys
+  (`panel.Shortcut`); Escape, a press outside it, an edit or `ClosePopup`
+  closes it, and the keyboard goes back to the editor. An offset outside
+  the text is taken as its nearest end.
+- `Rect` returns where the caret at a byte offset shows, in DIPs from the
+  top left of the editor's box as the last frame laid it out, and whether
+  its line shows (a line a fold hides does not). An app draws what belongs
+  to a range of the text from the `Rect` of its first and last offsets, as a
+  frame around it, in an element's `DrawOver`.
 
 ## Replacing ranges
 
@@ -464,6 +499,63 @@ as many as it needs.
 
 The [code editor example](../../examples/code-editor) has a live preview
 of its README.md.
+
+## Blocks between lines
+
+`SetBlocks` shows elements between the lines of the text, as Zed's blocks:
+an image under the line naming it, or a table in place of its source.
+They are no part of the text, which stays the buffer's.
+
+```go
+blocks := []editor.Block{{
+	Line: img.Line, Height: 200, Label: img.Alt,
+	Content: func(c *ui.Context, e ui.Element, b editor.Block) {
+		e.Children(func() { ui.Image(c, img.Source).Width(320) })
+	},
+}}
+app.code.SetBlocks(blocks)
+editor.View(c, app.code).Grow(1).FillWidth()
+```
+
+- **`Line`** and **`Above`** say where it goes: below the line, or above
+  it. Blocks move with their line's text. Deleting that line attaches
+  the block to the surviving line at that position, with `Above` unchanged.
+  Set them again as the text changes: those at the place of one shown
+  keep their elements and heights.
+- **`Content`** is given the element the editor places, using the text
+  layout's width, including its `WrapColumn` limit and minimum width, as
+  parts are (see [Bars and popups](#bars-and-popups)). It stays in place
+  as the text scrolls sideways.
+- **The height** is what the element lays out to. Only the blocks in view
+  are built, so a block not shown yet is taken to be `Height` high, or a
+  row, and measured as it shows, the lines in view staying where they are.
+- **Presses** on it go to the text, the caret to the line next to it,
+  unless `Interactive`; `Label` names it for assistive technology.
+
+A block on a line a [replacement](#replacing-ranges) hides shows in place
+of the lines the replacement covers, for a range showing nothing from the
+start of a line through a newline. A live preview does this for a table:
+
+```go
+if !hasCaret(table) {
+	rs = append(rs, editor.Replacement{Start: table.Start, End: table.End})
+	blocks = append(blocks, editor.Block{Line: table.FirstLine, Content: drawTable})
+}
+```
+
+Carets stop on such a block once, at the start of the range, showing
+before it, and a press on it puts the caret there: an app showing the
+source of what has a caret shows it then. `CursorShape` applies over the
+whole stand-in: a bar or block spans its height, and an underline sits
+at its bottom. The block and underline fit in the margin before the
+content; the bar keeps its insertion point. Without focus, only the
+block's outline stays visible.
+Selecting across it tints it,
+and deleting next to it deletes all of it. A fold hides the blocks of its
+lines.
+
+The [code editor example](../../examples/code-editor)'s live preview shows
+an image and a table this way.
 
 ## Line styles
 
@@ -579,7 +671,11 @@ presses from the text under it and the keyboard where the part needs it
 selected), and a handle to what the part shows and does. Style the element and build its
 content; its position can change too. The find bar comes with margins
 that keep it inside the editor, so `bar.Right(0)` leaves it the theme's
-`Space(4)` from the right edge; `bar.Margin(0)` takes them off. The editor's own looks are
+`Space(4)` from the right edge; `bar.Margin(0)` takes them off. An editor
+as high as its lines (`FitContent`) has no scroll of its own: the bars
+are built in a row over the whole editor, and stick to the top of the
+part of the text the containers around it show, so a bar an app builds
+inside `bar` moves with it. The editor's own looks are
 `DefaultFindBar`, `DefaultGoToLine`, `DefaultCompletions` and
 `DefaultHover`, which a render function can call and then restyle.
 
@@ -629,7 +725,9 @@ app.code.RenderHover = func(c *ui.Context, panel ui.Element, h *editor.HoverCard
 
 Assistive technology sees a multi-line text field, named by `Label`, with
 the text of the buffer, replaced ranges among it, and the newest selection,
-which it moves; the elements of replacements are named by their `Label`; the
+which it moves, and where its lines in view are, so that VoiceOver moves
+through it line by line and outlines the line it reads; the elements of
+replacements are named by their `Label`; the
 completions are a list, and the find bar a toolbar that tells the count
 of matches, except in a narrow editor, where its query field still tells
 an invalid regular expression. The editor's menu, its find and go to line bars and their

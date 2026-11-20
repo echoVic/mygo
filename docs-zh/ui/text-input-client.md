@@ -52,7 +52,7 @@ if input.Changed() {
 |---|---|
 | `TextForRange(range)` | 返回请求的文本，以及裁限或调整后的实际范围。支持全文查询，不限于插入点周围的固定范围。 |
 | `Selection()` | 报告主要的原生选区及其方向。额外的光标或不连续的选区保存在应用状态中。 |
-| `MarkedRange()` | 报告当前文稿中的预编辑，没有时返回 false。 |
+| `MarkedRange()` | 报告当前文稿中的预编辑，没有时返回 false。存在预编辑时，系统的输入法接收它用于组合的键，`Tester` 同样接收不带 Ctrl 或 Command 的键：它们既不会到达 `HandleInput`，也不会触发快捷键。 |
 | `ReplaceText(range, text)` | 在指定范围内提交文本；范围传入 nil 时，若有预编辑则为预编辑，否则为选区。按你的编辑策略清除预编辑。 |
 | `SetMarkedText(range, text, selected)` | 替换预编辑，并保留其标记范围。`selected` 相对于新标记的文本。 |
 | `UnmarkText()` | 清除标记状态，同时保留文稿文本。焦点丢失、客户端更换或元素被释放时也会调用。 |

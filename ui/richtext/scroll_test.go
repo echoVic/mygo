@@ -3,6 +3,7 @@ package richtext
 import (
 	"fmt"
 	"math"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -34,6 +35,19 @@ func boxOf(t *testing.T, boxes []ParagraphBox, i int) ParagraphBox {
 
 // near reports whether a and b are the same to a hundredth of a DIP.
 func near(a, b float32) bool { return math.Abs(float64(a-b)) < 0.01 }
+
+// openTester is ui.NewTester for a test that reads the document after its
+// last frame (CaretRect, VisibleParagraphs): the window stays open until
+// the test ends, as an app's does while it shows the editor. A document
+// holds its editor weakly, so that it doesn't keep a closed window's
+// alive, and once nothing uses the Tester the collector may take the
+// editor, after which the document reads as shown in none.
+func openTester(t *testing.T, view func(c *ui.Context), width, height int) *ui.Tester {
+	t.Helper()
+	tt := ui.NewTester(view, width, height)
+	t.Cleanup(func() { runtime.KeepAlive(tt) })
+	return tt
+}
 
 // ScrollBy scrolls the editor by as much as asked, as far as its text
 // goes, and reports whether it moved; before an editor showed the
@@ -153,7 +167,7 @@ func TestScrollToParagraph(t *testing.T) {
 func anchorTester(t *testing.T, doc *Document, focus bool) (tt *ui.Tester, boxes *[]ParagraphBox, at *int, room *float32) {
 	t.Helper()
 	boxes, at, room = new([]ParagraphBox), new(int), new(float32)
-	tt = ui.NewTester(func(c *ui.Context) {
+	tt = openTester(t, func(c *ui.Context) {
 		*boxes = doc.VisibleParagraphs()
 		EditorBase(c, doc, EditorOptions{Font: ui.Font{Size: 10}, Space: func(p int) float32 {
 			if p == *at {
@@ -285,7 +299,7 @@ func TestScrollAnchorAtTop(t *testing.T) {
 	doc := longDoc(200)
 	var boxes []ParagraphBox
 	var room float32
-	tt := ui.NewTester(func(c *ui.Context) {
+	tt := openTester(t, func(c *ui.Context) {
 		boxes = doc.VisibleParagraphs()
 		EditorBase(c, doc, EditorOptions{Font: ui.Font{Size: 10}, Space: func(p int) float32 {
 			if p == 1 {
@@ -546,6 +560,76 @@ func TestALongStepUndoesAsARegion(t *testing.T) {
 			}
 			if _, ok := doc.CaretRect(); !ok {
 				t.Error("the caret undo put back is out of view")
+			}
+		})
+	}
+}
+
+// A paragraph scrolled partly out of the editor shows only what is inside
+// the editor's box: its lines above the box are not painted over what is
+// there, as a picture taller than the editor's view would be. In an
+// Editor, they are not painted over its border or out of its rounded
+// corners either.
+func TestScrolledTextStaysInBox(t *testing.T) {
+	red := ui.RGB(255, 0, 0)
+	for _, styled := range []bool{false, true} {
+		name := "EditorBase"
+		if styled {
+			name = "Editor"
+		}
+		t.Run(name, func(t *testing.T) {
+			doc := NewDocument(NewText(strings.Repeat("overflow text ", 200)))
+			doc.SetSelection(doc.Text().Len(), doc.Text().Len())
+			var border, radius float32
+			tt := openTester(t, func(c *ui.Context) {
+				ui.Column(c).Padding(100, 20).Children(func() {
+					if styled {
+						// Padding of a DIP and large corners bring the text
+						// into them; the height is past an Editor's least.
+						th := *c.Theme()
+						th.Radius = 20
+						ui.Themed(c, &th).Children(func() {
+							Editor(c, doc, EditorOptions{Theme: &Theme{Text: red, Padding: [2]float32{1, 1}}}).Width(300).Height(120)
+						})
+						border, radius = editorBorder, th.Radius
+					} else {
+						EditorBase(c, doc, EditorOptions{Theme: &Theme{Text: red}}).Width(300).Height(120)
+					}
+				})
+			}, 400, 300)
+			tt.Frame()
+			img := tt.Image()
+			s := img.Bounds().Dx() / 400
+			// out returns how far the point (x, y) is outside the box the
+			// text may show in, in DIPs: inside the border, with the
+			// corners inside it rounded.
+			x0, y0, x1, y1 := 20+border, 100+border, 320-border, 220-border
+			r := max(radius-border, 0)
+			out := func(x, y float32) float32 {
+				dx := max(x0+r-x, x-(x1-r), 0)
+				dy := max(y0+r-y, y-(y1-r), 0)
+				if dx > 0 && dy > 0 {
+					return float32(math.Hypot(float64(dx), float64(dy))) - r
+				}
+				return max(x0-x, x-x1, y0-y, y-y1)
+			}
+			inside, outside := 0, 0
+			for y := 0; y < 300*s; y++ {
+				for x := 0; x < 400*s; x++ {
+					if c := img.RGBAAt(x, y); c.R > 150 && c.G < 100 && c.B < 100 {
+						if out((float32(x)+0.5)/float32(s), (float32(y)+0.5)/float32(s)) > 0.5/float32(s) {
+							outside++
+						} else {
+							inside++
+						}
+					}
+				}
+			}
+			if inside == 0 {
+				t.Fatal("no text shows in the editor")
+			}
+			if outside > 0 {
+				t.Fatalf("%d pixels of text outside the box", outside)
 			}
 		})
 	}

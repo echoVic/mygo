@@ -190,11 +190,23 @@ it replaces its texture in place rather than accumulating cached images.
 
 The CPU compositor remains the renderer for machines without a GPU and for
 small resting updates. Active transformed motion uses the GPU where one is
-available. Text bitmaps are sampled bilinearly when transformed, and
-transformed text uses grayscale coverage. GPU antialiasing follows the CPU
-renderer in device-pixel coordinates. To zoom a whole window, sharp, use
-the content's zoom (`Context.SetZoom`, see
-[Windows](windows.md#zoom)) rather than a transform.
+available. Text under a transform that scales it (`Scale`, `AnimatePose`,
+`Transition{ScaleContent}`) rasterizes at the size it shows at: its
+glyphs are made for the window's scale times the transform's, and the
+transform left to them only turns, skews or moves them, so that a card
+scaled up 1.6 times at rest is as sharp as the card laid out 1.6 times
+larger. Where the transform only scales and moves the text, its glyphs lie
+on the screen's pixels, as text laid out there does. While the scale
+changes, as an animation grows a word of lyrics, glyphs rasterize at steps
+of 2^(1/8) (about 9%) at or above it, a few sizes for the whole
+animation rather than one a frame, and at the scale itself from the frame
+after it stops. A `Cache()` bitmap, and the layer of a group faded with
+`Opacity`, renders at the same scale. Glyphs under the transform left to
+them are sampled bilinearly, and transformed text uses grayscale
+coverage. GPU antialiasing follows the CPU renderer in device-pixel
+coordinates. To zoom a whole window, use the content's zoom
+(`Context.SetZoom`, see [Windows](windows.md#zoom)), which lays it out
+again, rather than a transform.
 
 The gallery's **Motion** page shows nested transformed editable controls,
 an anchored popover, springs retargeted and thrown, keyframe sequences, and

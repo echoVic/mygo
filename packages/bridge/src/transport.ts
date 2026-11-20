@@ -1,4 +1,4 @@
-/** How a page posts to Go: WebKit's message handler, or WebView2's. */
+/** How a page posts to Go: WebKit's message handler, Android's, or WebView2's. */
 export interface Transport {
   post(message: string): void;
   /** Posts File objects along with a message (WebView2). */
@@ -9,6 +9,9 @@ export interface Transport {
 export function transport(w: any): Transport | null {
   const handler = w.webkit?.messageHandlers?.mygo;
   if (handler) return { post: (m) => handler.postMessage(m) };
+  // Android's web view: the host's JavaScript interface.
+  const android = w.mygoAndroid;
+  if (android) return { post: (m) => android.postMessage(m) };
   const webview = w.chrome?.webview;
   if (!webview) return null;
   return {

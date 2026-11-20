@@ -1,4 +1,4 @@
-//go:build linux && (amd64 || arm64)
+//go:build linux && !android && (amd64 || arm64)
 
 package linux
 
@@ -123,5 +123,67 @@ func TestMenuHides(t *testing.T) {
 		if got := w.menuHides(); got != tc.want {
 			t.Errorf("%s: menuHides() = %v, want %v", tc.name, got, tc.want)
 		}
+	}
+}
+
+// TestTrayName checks the IDs icons are made with: an icon of an ID is
+// named after the program and the ID, whatever the process, another icon
+// of that ID takes a number (#1835), and an icon of no ID is named after
+// the program and its number among the app's icons, whatever the
+// process, so that it too stays across launches.
+func TestTrayName(t *testing.T) {
+	b := &Backend{trays: map[int]*tray{}}
+	if got := b.trayName("main", "notes", 1); got != "notes-main" {
+		t.Errorf("an icon of ID main is %q, want notes-main", got)
+	}
+	b.trays[1] = &tray{id: 1, name: "notes-main"}
+	if got := b.trayName("main", "notes", 2); got != "notes-main-2" {
+		t.Errorf("a second icon of ID main is %q, want notes-main-2", got)
+	}
+	b.trays[2] = &tray{id: 2, name: "notes-main-2"}
+	if got := b.trayName("main", "notes", 3); got != "notes-main-3" {
+		t.Errorf("a third icon of ID main is %q, want notes-main-3", got)
+	}
+	if got := b.trayName("main", "", 3); got != "mygo-main" {
+		t.Errorf("an icon of ID main with no program name is %q, want mygo-main", got)
+	}
+	if got := b.trayName("", "notes", 4); got != "notes-4" {
+		t.Errorf("an icon of no ID is %q, want notes-4", got)
+	}
+	if got := b.trayName("", "", 4); got != "mygo-4" {
+		t.Errorf("an icon of no ID with no program name is %q, want mygo-4", got)
+	}
+	b.trays[3] = &tray{id: 3, name: "notes-5"} // an icon of ID 5
+	if got := b.trayName("", "notes", 5); got != "notes-5-2" {
+		t.Errorf("an icon of no ID whose name an icon of an ID has is %q, want notes-5-2", got)
+	}
+}
+
+// TestDropOwnerForgetsRoles checks that a menu that is gone leaves nothing
+// of its items behind: an app that builds a context menu of new items each
+// time it shows one would grow itemRoles for good, which enableEditItems
+// walks. An item another menu still shows keeps its role.
+func TestDropOwnerForgetsRoles(t *testing.T) {
+	popup, bar := newOwner(), newOwner()
+	const once, shared = -1, -2 // no item of an app has such an ID
+	itemsByID[once] = []nativeItem{{owner: popup}}
+	itemsByID[shared] = []nativeItem{{owner: popup}, {owner: bar}}
+	itemRoles[once], itemRoles[shared] = "copy", "paste"
+	t.Cleanup(func() {
+		for _, id := range []int{once, shared} {
+			delete(itemsByID, id)
+			delete(itemRoles, id)
+		}
+	})
+	dropOwner(popup)
+	if _, ok := itemRoles[once]; ok || itemsByID[once] != nil {
+		t.Errorf("an item of the menu dropped alone: role kept %v, %d native items", ok, len(itemsByID[once]))
+	}
+	if itemRoles[shared] != "paste" || len(itemsByID[shared]) != 1 {
+		t.Errorf("an item another menu shows: role %q, %d native items", itemRoles[shared], len(itemsByID[shared]))
+	}
+	dropOwner(bar)
+	if _, ok := itemRoles[shared]; ok {
+		t.Error("its role stayed after the last menu showing it went")
 	}
 }

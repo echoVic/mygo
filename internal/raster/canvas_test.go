@@ -138,6 +138,47 @@ func TestCanvasRemovalReleasesEffectInputs(t *testing.T) {
 	runtime.KeepAlive(&r)
 }
 
+func TestCanvasRemovalReleasesBandInputs(t *testing.T) {
+	old := runtime.GOMAXPROCS(4)
+	defer runtime.GOMAXPROCS(old)
+	var r Renderer
+	defer r.Release()
+	s := &scene.Scene{Width: 8, Height: 8}
+	draw := func() weak.Pointer[scene.Image] {
+		input := scene.NewImageRGBA(8, 8, make([]byte, 4*8*8))
+		for i := 3; i < len(input.Pix); i += 4 {
+			input.Pix[i] = 128
+		}
+		c := scene.NewCanvas(256, 128)
+		for range 32 {
+			c.Scene.Ops = append(c.Scene.Ops, scene.Op{Kind: scene.OpFill, Rect: scene.Rect{W: 256, H: 128}, Color: scene.Color{R: 90, A: 100}})
+		}
+		c.Scene.Ops = append(c.Scene.Ops,
+			scene.Op{Kind: scene.OpPushClip, Rect: scene.Rect{W: 256, H: 128}, Image: input, Src: scene.Rect{W: 8, H: 8}},
+			scene.Op{Kind: scene.OpImage, Rect: scene.Rect{X: 10, Y: 10, W: 220, H: 100}, Image: input, Src: scene.Rect{W: 8, H: 8}, Blur: 2},
+			scene.Op{Kind: scene.OpPopClip})
+		s.Canvases = []*scene.Image{c}
+		r.Render(s)
+		if runtime.GOMAXPROCS(0) > 1 && len(r.canvas.rs) <= 1 {
+			t.Fatal("canvas did not use band renderers")
+		}
+		return weak.Make(input)
+	}
+	var inputs []weak.Pointer[scene.Image]
+	for range 8 {
+		inputs = append(inputs, draw())
+	}
+	s.Reset(8, 8, scene.Color{})
+	r.Render(s)
+	runtime.GC()
+	for i, input := range inputs {
+		if input.Value() != nil {
+			t.Fatalf("discarded canvas %d still retains a band input", i)
+		}
+	}
+	runtime.KeepAlive(&r)
+}
+
 func TestCanvasRedrawReadsPreviousPixels(t *testing.T) {
 	c := scene.NewCanvas(16, 8)
 	c.Scene.Ops = []scene.Op{{Kind: scene.OpFill, Rect: scene.Rect{W: 4, H: 8}, Color: scene.Color{R: 190, G: 80, A: 255}}}

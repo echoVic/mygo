@@ -53,12 +53,12 @@ mygo.NewWindow(mygo.WindowOptions{Title: "Inspector", Content: ui.View(app.view)
 | `Opacity` | 0 到 1 之间 |
 | `IgnoreMouseEvents` | 创建窗口时就让鼠标穿透到它背后的内容，如同之后调用 `SetIgnoreMouseEvents(true)`（见[点击穿透窗口](#点击穿透窗口)） |
 | `DisableResize`, `DisableMove`, `DisableMinimize`, `DisableMaximize`, `DisableClose`, `DisableFullScreen`, `DisableShadow` | 去掉相应能力。在 Wayland 下的 Linux 上，`DisableShadow` 让无边框窗口或隐藏式标题栏去掉 GTK 在它们周围绘制的阴影和边框 |
-| `AlwaysOnTop` | 让窗口保持在其他窗口之上 |
+| `AlwaysOnTop` | 让窗口保持在其他窗口之上；在 Wayland 下仅限不在任务栏中的无边框窗口，见[点击穿透窗口](#点击穿透窗口) |
 | `SkipTaskbar` | 让窗口不出现在任务栏中（Linux、Windows） |
 | `AutoHideMenuBar` | 只在键盘焦点进入菜单栏时（按 Alt 或 F10）显示菜单栏（Linux、Windows），见[菜单栏](menus.md#菜单栏) |
 | `Parent`, `Modal` | 子窗口，对其父窗口模态，也可以是[叠在浮出窗口上的对话框](#叠在浮出窗口上的对话框)；对于紧挨其某一部分放置的窗口，见[浮出窗口](#浮出窗口) |
 | `Panel` | 启动器或快速输入的窗口，浮在所有应用之上，见[面板](#面板) |
-| `Page` | 窗口的[页面](#页面)选项：其预加载脚本、受信任的来源、Web 检查器、缩放、用户代理及其后缀、滑动和捏合 |
+| `Page` | 窗口的[页面](#页面)选项：其预加载脚本、受信任的来源、Web 检查器、缩放、用户代理及其后缀、滑动、捏合和用户的缩放 |
 
 ## 无闪烁地显示窗口
 
@@ -192,6 +192,16 @@ win.Focus()             // Blur, IsFocused
   ```
 
 - `FlashFrame(true)` 请求注意：任务栏按钮闪烁（Windows）、窗口被标记为紧急（Linux）或 Dock 图标弹跳（macOS）。
+- `SetThumbBar` 在任务栏中窗口实时预览的下方放置缩略图工具栏（Windows）：一排最多 7 个小按钮，每个按钮有一个 PNG 图标、一段工具提示和一种状态：
+
+  ```go
+  win.SetThumbBar([]mygo.ThumbButton{
+      {Icon: back, ToolTip: "Back", Click: func(b *mygo.ThumbButton, win *mygo.Window) { goBack() }},
+      {Icon: play, ToolTip: "Play", Click: func(b *mygo.ThumbButton, win *mygo.Window) { play() }},
+  })
+  ```
+
+  首次调用确定按钮的数量和顺序（shell 的 `ThumbBarAddButtons` 只允许这样）；后续调用更新图标（传入新 PNG，或传 nil / 相同的 PNG 以保留原图标）、工具提示、`Disabled` 和 `Hidden` 状态，并替换 `Click` 函数。最重要的按钮放在前面：空间不足时工具栏从右侧截断。按钮的 `Click` 在主线程运行。其他平台上 `SetThumbBar` 返回 `errors.ErrUnsupported`。
 
 ## 活动与非活动窗口
 
@@ -362,6 +372,8 @@ fl := mygo.NewFlyout(mygo.FlyoutOptions{
 ```go
 mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory) // no Dock icon (macOS)
 mygo.App.OnWindowAllClosed(func() {})                     // keep running with no window
+var quitting bool // a quit closes the panel
+mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) { quitting = true })
 
 mygo.App.WhenReady(func() {
 	panel := mygo.NewWindow(mygo.WindowOptions{
@@ -375,10 +387,13 @@ mygo.App.WhenReady(func() {
 		URL:         "/launcher",
 	})
 	// Hide rather than close, so that it shows at once the next time:
-	// on Escape, Cmd-W or Alt-F4, and as the user goes elsewhere.
+	// on Escape, Cmd-W or Alt-F4, and as the user goes elsewhere. A quit
+	// closes it: a window kept open cancels the quit.
 	panel.OnClose(func(e *mygo.CloseEvent) {
-		e.PreventDefault()
-		panel.Hide()
+		if !quitting {
+			e.PreventDefault()
+			panel.Hide()
+		}
 	})
 	panel.OnBlur(panel.Hide)
 
@@ -441,6 +456,8 @@ pet.SetInputRegion([]mygo.Rectangle{character, {X: 10, Y: 10, Width: 220, Height
 
 在 macOS 和 Windows 上，按住鼠标键时窗口保持原样：从角色上开始的拖拽在那里结束，从背后内容上开始的拖拽也在那里结束，松开后决定下一次谁接收鼠标。
 
+在会忽略置顶的 Wayland 下，这样的窗口（无边框、`AlwaysOnTop` 且 `SkipTaskbar`，没有父窗口）在合成器支持 layer shell 协议（KDE Plasma、Sway、Hyprland、COSMIC……）且已安装 `libgtk-layer-shell.so.0` 时，会像[面板](#面板)一样使用该协议的绘制表面：显示在覆盖层，位于全屏窗口之上，不出现在任务栏中，按窗口的边界定位，不受桌面面板预留区域的影响；只有被点击时才接收键盘，因此它下面的应用保持键盘焦点。它会一直保持在上层直到关闭：`SetAlwaysOnTop(false)` 无法让 layer shell 表面变回普通窗口，因此允许用户关闭置顶的应用需要重新打开一个不带 `AlwaysOnTop` 的窗口。在其他桌面上（例如没有 layer shell 的 GNOME），它与普通窗口一样，可能被其他窗口遮住；在 XWayland 下（`GDK_BACKEND=x11`），GNOME 会让它保持在其他窗口之上，全屏窗口也不例外。
+
 ## 事件
 
 监听器在主线程上运行：保持简短，耗时工作另起 goroutine。每个 `On…` 方法返回一个移除监听器的函数。
@@ -454,7 +471,7 @@ pet.SetInputRegion([]mygo.Rectangle{character, {X: 10, Y: 10, Width: 220, Height
 | `OnResize`, `OnMove` | 它被调整大小或移动 |
 | `OnMaximize`, `OnUnmaximize`, `OnMinimize`, `OnRestore` | 其状态改变 |
 | `OnEnterFullScreen`, `OnLeaveFullScreen` | 它进入或离开全屏 |
-| `OnReadyToShow` | 其第一个页面已准备好显示，或其原生 UI 绘制了第一帧 |
+| `OnReadyToShow` | 其第一个页面已准备好显示或加载失败（除非 `OnDidFailLoad` 的监听器加载了另一个页面，那么窗口会等待该页面），或其原生 UI 绘制了第一帧 |
 | `OnFileDrop` | 文件被拖放到其页面上，见[拖放的文件](frontend.md#拖放的文件)，或拖放到未接收它们的原生 UI 上，见[拖放的文件](ui/input.md#拖入的文件) |
 
 在关闭有未保存更改的窗口之前询问：
@@ -518,6 +535,7 @@ mygo.NewWindow(mygo.WindowOptions{
 | `PictureInPicture` | 让页面的视频进入画中画，见[画中画](#画中画)（macOS；WebView2 已经允许） |
 | `SwipeNavigation` | 水平滑动会在页面历史中后退和前进，如同浏览器，见[手势](#滑动和捏合) |
 | `PinchZoom` | 捏合会放大页面，如同浏览器，见[手势](#滑动和捏合) |
+| `ZoomControl` | 用户可以用 Ctrl+滚轮缩放页面，如同浏览器，见[用户的缩放](#用户的缩放) |
 | `UserAgentSuffix` | 附加到用户代理而不是替换它（`UserAgent` 会替换），如 `"MyApp/1.2"`；它也会附加到 `UserAgent`，`SetUserAgent` 会保留它，且会去掉首尾空格 |
 | `ContentRules` | 阻止页面加载的内容并隐藏页面一部分的规则，见[阻止内容](#阻止内容) |
 | `BackgroundThrottling` | `ThrottlingOn`（web view 自己的）或 `ThrottlingOff`，后者让页面在其窗口隐藏、最小化或被覆盖时继续运行，见[后台页面](#后台页面) |
@@ -532,7 +550,7 @@ mygo.NewWindow(mygo.WindowOptions{
 |---|---|
 | `OnWillNavigate(func(e *mygo.NavigateEvent))` | 页面即将导航，例如点击链接之后；`e.PreventDefault()` 取消它。`e.UserInitiated` 表示导航是否由用户的手势开始——点击链接，或点击后由处理器设置 `location.href`——还是页面脚本自行发起。`LoadURL` 及其同类不会调用它，页面的 iframe 也不会，除了 Linux 上 WebKitGTK 2.56 之前的版本，那里无法告知导航来自哪个框架：在那里它也会为 iframe 的导航调用，但 `srcdoc` 的除外。 |
 | `OnDidNavigate(func(url string))` | 一次导航已提交 |
-| `OnDOMReady` | 页面的 DOM 已就绪（`DOMContentLoaded`） |
+| `OnDOMReady` | 页面的 DOM 已就绪（`DOMContentLoaded`），或者 Web 视图在后退或前进时按离开时的原样再次显示该页面 |
 | `OnDidFinishLoad` | 页面完成加载 |
 | `OnDidFailLoad(func(err *mygo.LoadError))` | 页面加载失败 |
 | `OnPageTitleUpdated(func(e *mygo.TitleEvent))` | 页面的 `<title>` 改变；阻止该事件会保持窗口标题不变 |
@@ -577,6 +595,27 @@ mygo.NewWindow(mygo.WindowOptions{
 | Windows | 触摸屏上的滑动（`IsSwipeNavigationEnabled`） | 触摸屏的捏合（`IsPinchZoomEnabled`）；没有 `ICoreWebView2Settings5` 的 WebView2 Runtime 总是缩放 |
 
 WebKitGTK 和 WebView2 默认开启捏合，WebView2 还默认开启滑动：除非页面要求，MyGo 会关闭它们。
+
+### 用户的缩放
+
+页面按应用的缩放而缩放：通过 `ZoomFactor` 和 `SetZoomFactor`，或“视图”菜单中的缩放菜单项（`RoleZoomIn`、`RoleZoomOut` 和 `RoleResetZoom`，macOS 默认菜单中的也是），而不像在浏览器中那样随用户缩放，这与桌面应用的惯例一致：页面就是其界面的应用，会让页面保持它布局时的大小。`ZoomControl` 让用户也能缩放页面，窗口页面和 [web view](ui/web-view.md) 页面均适用：
+
+```go
+mygo.NewWindow(mygo.WindowOptions{
+	URL:  "/manual/",
+	Page: mygo.PageOptions{ZoomControl: true},
+})
+```
+
+| | `ZoomControl` |
+|---|---|
+| Windows | Ctrl+滚轮，以及在 WebView2 自带按键开启时的 Ctrl+加号和 Ctrl+减号，这些按键随[检查器](frontend.md#网页检查器)一起提供（`IsZoomControlEnabled`） |
+| macOS | 无：WKWebView 自身不会因任何按键或滚轮而缩放 |
+| Linux | 无：WebKitGTK 自身不会因任何按键或滚轮而缩放 |
+
+`Page.ZoomFactor` 会报告用户的缩放，页面也会像得知 `SetZoomFactor` 的缩放那样得知它。WebView2 会为每个站点记住一个缩放：页面导航到另一个站点时，它可能恢复该站点上次的缩放，`ZoomFactor` 也会随之变化。
+
+在有 `ZoomControl` 之前，WebView2 允许用户用 Ctrl+滚轮缩放每个页面：仍应如此缩放的页面需要设置它。
 
 ### 主题色
 

@@ -1,4 +1,4 @@
-//go:build darwin
+//go:build darwin && !ios
 
 package darwin
 
@@ -111,9 +111,12 @@ type window struct {
 	// popover shows a flyout with the look of AppKit's popovers
 	// (Flyout.Popover), in its window, win while it shows; popoverClosing
 	// tells that the backend closes it, not the user; popoverHeld that
-	// a window was modal to it as it showed (holdPopover).
+	// a window was modal to it as it showed (holdPopover); popoverShown
+	// whether its surface was last told that some of it shows
+	// (tellPopoverOcclusion).
 	popover, popoverController  id
 	popoverClosing, popoverHeld bool
+	popoverShown                bool
 	// ignoreMouse is SetIgnoreMouseEvents', and inputRegion
 	// SetInputRegion's (input_region.go), nil for none, whose tracking
 	// area is regionTracking; ignoring is whether the window lets the
@@ -267,6 +270,10 @@ func (w *window) create() {
 		behavior = collectionCanJoinAllSpaces | collectionFullScreenAuxiliary | collectionIgnoresCycle | collectionTransient
 		// A panel stays as the app is deactivated: the app hides it.
 		send(w.win, "setHidesOnDeactivate:", 0)
+		// NSPanel becomes key only when a view needs it (the default). A
+		// hidden page has no first responder yet: Show would order the
+		// panel front without the keyboard while another app is active.
+		send(w.win, "setBecomesKeyOnlyIfNeeded:", 0)
 	} else if w.modalToFlyout() {
 		// Where its flyout is, over another app in full screen too.
 		behavior = collectionFullScreenAuxiliary | collectionTransient
@@ -712,6 +719,10 @@ func (w *window) cleanup() {
 	if w.closed {
 		return
 	}
+	popover := w.popover != 0
+	if !popover {
+		w.orderOutClosing()
+	}
 	w.closeWebViews()
 	w.closed = true
 	if contextWindow == w {
@@ -731,15 +742,8 @@ func (w *window) cleanup() {
 	send(w.web, "stopLoading")
 	send(w.web, "setNavigationDelegate:", 0)
 	send(w.web, "setUIDelegate:", 0)
-	if w.popover != 0 {
+	if popover {
 		w.cleanupPopover()
-	} else {
-		send(w.win, "setDelegate:", 0)
-		if w.modalToFlyout() {
-			w.leaveFlyout()
-		} else if w.parent != nil && !w.parent.closed {
-			send(w.parent.win, "removeChildWindow:", uintptr(w.win))
-		}
 	}
 	delete(b.byDelegate, w.delegate)
 	delete(b.byWebView, w.web)
@@ -765,8 +769,30 @@ func (w *window) cleanup() {
 	release(w.view)
 	// AppKit is still closing the window; let the pool release it.
 	autorelease(w.delegate)
-	if w.popover == 0 {
+	if !popover {
 		autorelease(w.win)
+	}
+}
+
+// orderOutClosing orders out a window that closes, before cleanup takes
+// its content down: AppKit sends windowWillClose: before it orders the
+// window out, with the animation that fades it, which then faded a
+// window with nothing in it, and a light one flashed white (#1931).
+// Ordered out here, whether Close or the user closes it, the window
+// fades with its last frame, and AppKit's own ordering out finds nothing
+// left to do. The delegate goes first, so the window tells nothing of
+// losing the keyboard as it goes, as before; a window modal to a flyout
+// gives the keyboard back to it first, as Hide does. A window that does
+// not show, hidden or minimized, is left to AppKit.
+func (w *window) orderOutClosing() {
+	send(w.win, "setDelegate:", 0)
+	if w.modalToFlyout() {
+		w.leaveFlyout()
+	} else if w.parent != nil && !w.parent.closed {
+		send(w.parent.win, "removeChildWindow:", uintptr(w.win))
+	}
+	if sendBool(w.win, "isVisible") {
+		send(w.win, "orderOut:", 0)
 	}
 }
 
@@ -908,9 +934,11 @@ func (w *window) Show() {
 		return
 	}
 	w.showAboveParent(true)
-	if !w.opts.Panel {
-		send(w.b.app, "activateIgnoringOtherApps:", 1)
+	if w.opts.Panel {
+		w.takeKeyWithoutActivating()
+		return
 	}
+	send(w.b.app, "activateIgnoringOtherApps:", 1)
 }
 
 // A window modal to a flyout (modalToFlyout) is no sheet of it, which
@@ -1209,6 +1237,22 @@ func (w *window) IsVisible() bool {
 	return sendBool(w.win, "isVisible") || !w.hidMiniaturized && w.IsMinimized()
 }
 
+// takeKeyWithoutActivating makes a panel the key window without activating
+// the app. Show and Focus already ordered it front; NSApp may still be
+// resigning active (Finder can be frontmost first, see TestGlass), which
+// would take the key back. The next turn takes it again if that happens.
+func (w *window) takeKeyWithoutActivating() {
+	if !sendBool(w.win, "isKeyWindow") {
+		send(w.win, "makeKeyWindow")
+	}
+	w.b.post(func() {
+		if w.closed || !sendBool(w.win, "isVisible") || sendBool(w.win, "isKeyWindow") {
+			return
+		}
+		send(w.win, "makeKeyWindow")
+	})
+}
+
 func (w *window) Focus() {
 	if w.host != nil {
 		if !w.closed {
@@ -1222,15 +1266,35 @@ func (w *window) Focus() {
 	}
 	w.hiddenWithParent, w.hidMiniaturized = false, false
 	send(w.win, "makeKeyAndOrderFront:", 0)
-	if !w.opts.Panel {
-		send(w.b.app, "activateIgnoringOtherApps:", 1)
+	if w.opts.Panel {
+		w.takeKeyWithoutActivating()
+		return
 	}
+	send(w.b.app, "activateIgnoringOtherApps:", 1)
 }
 
 func (w *window) Blur() { send(w.win, "orderBack:", 0) }
 func (w *window) IsFocused() bool {
 	return sendBool(w.win, "isKeyWindow")
 }
+
+// CornerRadius is the radius of the window's corners: a rounded frameless
+// window's (roundContent), or the one the system draws a titled window
+// with. AppKit tells that one only through NSWindow's _cornerRadius, read
+// when the window answers it; it is 26 on macOS 26 with a toolbar, 16
+// without one, smaller before. A window in full screen has none.
+func (w *window) CornerRadius() float64 {
+	switch {
+	case w.host != nil || w.IsFullScreen():
+		return 0
+	case w.radius > 0:
+		return float64(w.radius)
+	case !w.hasStyle(styleTitled) || !respondsTo(w.win, "_cornerRadius"):
+		return 0
+	}
+	return max(msgFloat(w.win, sel("_cornerRadius")), 0)
+}
+
 func (w *window) Minimize()         { send(w.win, "miniaturize:", 0) }
 func (w *window) IsMinimized() bool { return sendBool(w.win, "isMiniaturized") }
 
@@ -2442,6 +2506,12 @@ func registerWindowClasses() {
 			}),
 			method("windowDidChangeOcclusionState:", func(self id, _ objc.SEL, n id) {
 				if w := b().windowFor(self); w != nil && w.surface != nil {
+					if w.popover != 0 {
+						// Its popover's window, from the notification
+						// center (adoptPopoverWindow).
+						w.tellPopoverOcclusion()
+						return
+					}
 					kind := platform.SurfaceShown
 					if !w.surface.visible() {
 						kind = platform.SurfaceHidden

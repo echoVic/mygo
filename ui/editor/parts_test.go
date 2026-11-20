@@ -459,6 +459,7 @@ func TestDiffFitContentBuildsSeparatorsInView(t *testing.T) {
 		tt := ui.NewTester(func(c *ui.Context) {
 			ui.Scroll(c).Fill().Children(func() { DiffView(c, d).FillWidth() })
 		}, 800, 600)
+		waitCompared(t, tt, d)
 		tt.Frame()
 		tt.Frame()
 		built = 0
@@ -496,6 +497,7 @@ func TestDiffFitContentBuildsSeparatorsScrolledTo(t *testing.T) {
 		tt := ui.NewTester(func(c *ui.Context) {
 			ui.Scroll(c).Fill().Children(func() { DiffView(c, d).FillWidth() })
 		}, 800, 600)
+		waitCompared(t, tt, d)
 		tt.Frame()
 		tt.Frame()
 		// No frame but those the scroll asks for, as in a window.
@@ -524,11 +526,17 @@ func TestDiffFitContentMeasuresLinesShown(t *testing.T) {
 	lines[10000] = "changed"
 	nw := strings.Join(lines, "\n")
 	d := &DiffState{Old: NewBuffer(old), New: NewBuffer(nw), Wrap: true, FitContent: true}
+	// Compared before a window shows them, so that the first frame folds:
+	// while a comparison off the main thread runs, every line shows.
+	d.Hunks()
 	tt := ui.NewTester(func(c *ui.Context) {
 		ui.Scroll(c).Fill().Children(func() { DiffView(c, d).FillWidth() })
 	}, 800, 600)
 	tt.Frame()
 	tt.Frame()
+	if d.Comparing() {
+		t.Fatal("compared again off the main thread")
+	}
 	v := &d.eds[1].view
 	if known := v.heights.wraps.known; known == 0 || known > 1000 {
 		t.Errorf("%d of the %d lines' wraps measured, those shown being a few", known, v.text.LineCount())
@@ -658,5 +666,29 @@ func TestCodeEditorNoDefinitionClick(t *testing.T) {
 	tt.Frame()
 	if len(asked) != 1 || asked[0] != 2 {
 		t.Fatalf("Cmd+click went to the definitions at %v, not at 2", asked)
+	}
+}
+
+// A bar of an editor that scrolls itself is an absolute box, as it has
+// always been: the insets an app's render function sets place it against
+// the editor, rather than moving it within a row.
+func TestCodeEditorFindBarAbsolute(t *testing.T) {
+	st := &State{Buffer: NewBuffer(strings.Repeat("line\n", 50))}
+	st.RenderFindBar = func(c *ui.Context, bar ui.Element, f *FindBar) {
+		bar.Left(30).Top(20)
+		DefaultFindBar(c, bar, f)
+	}
+	tt := ui.NewTester(func(c *ui.Context) { View(c, st).Fill() }, 600, 400)
+	tt.Frame()
+	st.Find("line")
+	tt.Frame()
+	r, ok := tt.Find("Find")
+	if !ok {
+		t.Fatal("the find bar is not built")
+	}
+	// The insets place the bar against the editor, within its padding's
+	// reach; a bar in a row would sit where the row put it instead.
+	if r.X < 30 || r.X > 42 || r.Y < 20 || r.Y > 32 {
+		t.Fatalf("the bar's insets place it at %v, %v, want 30, 20, up to its padding", r.X, r.Y)
 	}
 }

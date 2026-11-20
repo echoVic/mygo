@@ -39,9 +39,11 @@ func (ed *editor) offer(ev ui.InputEvent) bool {
 
 // retry runs fn, which edits the text as the editor shows it, again on
 // the text as it is when another goroutine edited the buffer meanwhile,
-// rather than leaving the edit out (apply).
+// rather than leaving the edit out (apply), as many times as it takes:
+// each run that comes too late found another goroutine's edit in, so the
+// buffer moves on, and a letter typed is never lost.
 func (ed *editor) retry(fn func() bool) bool {
-	for range 4 {
+	for {
 		ed.sync()
 		ed.stale = false
 		ok := fn()
@@ -49,7 +51,6 @@ func (ed *editor) retry(fn func() bool) bool {
 			return ok
 		}
 	}
-	return false
 }
 
 func (ed *editor) dispatch(ev ui.InputEvent) bool {
@@ -266,6 +267,10 @@ func (ed *editor) textAt(x, y float32) int {
 		return -1
 	}
 	cx, cy := ed.toContent(x, y)
+	// An app's block is over no text.
+	if b, _, ok := ed.blockAt(cy); ok && b.kind == blockApp {
+		return -1
+	}
 	off := ed.offsetAt(cx, cy)
 	if cr, ok := ed.caretRect(off); !ok || float64(cy) > float64(cr.Y+cr.H) ||
 		off == ed.view.text.LineEnd(ed.view.text.LineOf(off)) && cx > cr.X+ed.view.charWidth/2 {
@@ -483,7 +488,7 @@ func (ed *editor) scrollbars() (vertical, horizontal bool) {
 		return false, false
 	}
 	vertical = !ed.o.noScrollbar && !ed.o.fitContent && ed.scrollMax() > 0
-	return vertical, !ed.view.wrap && ed.view.maxLine > ed.hTrack()
+	return vertical, !ed.view.wrap && ed.contentWidth() > ed.hTrack()
 }
 
 // hTrack is the length of the horizontal scroll bar's track: the text's
@@ -492,8 +497,17 @@ func (ed *editor) hTrack() float32 {
 	return ed.r.W - ed.textX - ed.trackWidth()
 }
 
+// contentWidth is how wide the lines are that scroll sideways: the
+// widest the view knows, or as the last frame painted them, while an edit
+// since may have left the widest unmeasured until the next frame lays
+// out the lines in view, and brings the offset into their range.
+func (ed *editor) contentWidth() float32 {
+	return max(ed.paintedW, ed.view.measured.widest())
+}
+
+// maxScrollX is how far the content scrolls right.
 func (ed *editor) maxScrollX() float32 {
-	return max(0, ed.view.maxLine+ed.view.charWidth*4-(ed.r.W-ed.textX))
+	return max(0, ed.contentWidth()+ed.view.charWidth*4-(ed.r.W-ed.textX))
 }
 
 // scrollbarPress grabs a thumb, or jumps to where the track was pressed.
@@ -544,7 +558,7 @@ func (ed *editor) bar(horizontal bool) ui.Scrollbar {
 		return ui.Scrollbar{
 			Box:        ui.Rect{X: ed.textX, W: ed.hTrack(), H: ed.hbarY + style.TrackWidth},
 			Horizontal: true,
-			View:       ed.r.W - ed.textX, Content: ed.view.maxLine + ed.view.charWidth*4, Offset: ed.scrollX,
+			View:       ed.r.W - ed.textX, Content: ed.contentWidth() + ed.view.charWidth*4, Offset: ed.scrollX,
 			Style: style,
 		}
 	}

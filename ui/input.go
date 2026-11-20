@@ -17,6 +17,20 @@ func (rt *engine) event(ev platform.SurfaceEvent) (taken bool) {
 		// A menu asking about its item changes nothing.
 		return rt.commandEnabled(ev.Text)
 	}
+	if ev.Kind == platform.DragRegionAt {
+		// A backend asking where a finger lands changes nothing either.
+		rt.fromWindow(&ev)
+		return rt.dragRegionAt(float32(ev.X), float32(ev.Y))
+	}
+	if ev.Kind >= platform.TouchDown && ev.Kind <= platform.TouchCancel {
+		// Fingers, which only views that ask follow (Touches): the
+		// pointer events the backend makes of them come on their own.
+		if rt.touchIn != nil {
+			rt.fromWindow(&ev)
+			rt.touchIn.event(rt, ev)
+		}
+		return false
+	}
 	switch ev.Kind {
 	case platform.SurfaceFrame:
 	case platform.PointerMove, platform.PointerLeave:
@@ -49,8 +63,10 @@ func (rt *engine) event(ev platform.SurfaceEvent) (taken bool) {
 	held := rt.buttons
 	switch ev.Kind {
 	case platform.PointerMove, platform.PointerUp:
+		rt.lastPointerTouch = ev.Touch
 		rt.pointerDevice(ev)
 	case platform.PointerDown:
+		rt.lastPointerTouch = ev.Touch
 		// It presses once it came where it presses (pointerDevice).
 		rt.pointerType = PointerType(ev.Pointer)
 	case platform.SurfaceBlur, platform.PointerCancel:
@@ -60,6 +76,12 @@ func (rt *engine) event(ev platform.SurfaceEvent) (taken bool) {
 	}
 	if rt.insp.pointer(rt, ev, x, y) {
 		return true
+	}
+	if ev.Touch && touchInput != nil {
+		x, y = rt.aimTouch(ev.Kind, x, y)
+		if touchInput(rt, ev, x, y) {
+			return false
+		}
 	}
 	switch ev.Kind {
 	case platform.PointerMove, platform.PointerDown, platform.PointerUp, platform.PointerScroll, platform.PointerZoom:
@@ -116,7 +138,7 @@ func (rt *engine) event(ev platform.SurfaceEvent) (taken bool) {
 		rt.scroll(float32(ev.DX), float32(ev.DY), Modifiers(ev.Mods), ev.Precise, ev.Momentum)
 	case platform.PointerZoom:
 		rt.pointerMove(x, y)
-		rt.zoom(float32(ev.Scale), Modifiers(ev.Mods))
+		rt.zoom(float32(ev.Scale), float32(ev.Rotation), Modifiers(ev.Mods))
 	case platform.KeyPressed:
 		rt.modsChanged(Modifiers(ev.Mods))
 		rt.holdKey(Modifiers(ev.Mods), Key(ev.Key), Key(ev.PhysicalKey))
@@ -521,6 +543,30 @@ func (s *state) pointer(rt *engine) (x, y float32) {
 
 const interactive = flagClickable | flagFocusable | flagEditable | flagSelectable | flagDragWindow | flagDraggable | flagTrackPointer
 
+// dragRegionAt reports whether a finger landing at x, y moves the
+// window, as a press of the first button does there (pointerDown): the
+// first interactive element under it is a drag region (DragWindow) and
+// nothing else, and nothing around it scrolls, as a sidebar that is a
+// drag region does, which the finger scrolls instead. An element's
+// handler (HandleInput) may still take the press there.
+func (rt *engine) dragRegionAt(x, y float32) bool {
+	drag := false
+	for _, id := range rt.hitChain(x, y) {
+		s := rt.states[id]
+		switch {
+		case s == nil:
+		case s.flags&flagScrollY != 0 && s.contentH > float64(s.h), s.flags&flagScrollX != 0 && s.contentW > float64(s.w):
+			return false
+		case !drag && s.flags&interactive != 0:
+			if s.flags&flagDragWindow == 0 || s.flags&(interactive&^flagDragWindow) != 0 {
+				return false
+			}
+			drag = true
+		}
+	}
+	return drag
+}
+
 func (rt *engine) pointerDown(x, y float32, button int, mods Modifiers, clicks int) {
 	rt.downing++
 	defer rt.endDown()
@@ -558,6 +604,9 @@ func (rt *engine) pointerDown(x, y float32, button int, mods Modifiers, clicks i
 		newFocus := uint64(0)
 		if focus != nil {
 			newFocus = focus.id
+			if rt.touch.down && focus.textClient != nil {
+				rt.ime.show++
+			}
 		}
 		if newFocus != rt.focused {
 			rt.focused = newFocus
@@ -916,15 +965,21 @@ func (rt *engine) scroll(dx, dy float32, mods Modifiers, precise, momentum bool)
 	}
 }
 
-// zoom gives a pinch to the element under the pointer that handles its
-// input; no element zooms of its own.
-func (rt *engine) zoom(scale float32, mods Modifiers) {
-	if scale <= 0 || scale == 1 {
+// zoom gives a pinch or twist to the innermost element under the pointer
+// that handles it; one whose handler leaves it passes it on to the handlers
+// around it, as scroll does. No element zooms of its own.
+func (rt *engine) zoom(scale, rotation float32, mods Modifiers) {
+	if scale <= 0 || scale == 1 && rotation == 0 {
 		return
 	}
 	chain := rt.appendHitChain(rt.chain[:0], rt.pointerX, rt.pointerY)
 	rt.chain = chain[:0]
-	rt.deliver(rt.handler(chain), InputEvent{Kind: InputZoom, Scale: scale, Mods: mods})
+	ev := InputEvent{Kind: InputZoom, Scale: scale, Rotation: rotation, Mods: mods}
+	for _, id := range chain {
+		if s := rt.states[id]; s != nil && s.input != nil && s.flags&flagDisabled == 0 && rt.deliver(s, ev) {
+			return
+		}
+	}
 }
 
 // dragTo returns the offset of content whose thumb moved by moved DIPs
@@ -997,9 +1052,9 @@ func (rt *engine) scrollKey(mods Modifiers, key Key) bool {
 		page = 1
 	case mods == 0 && key == KeyPageUp, mods == Shift && key == KeySpace:
 		page = -1
-	case (mods == 0 || mods == Cmd) && key == KeyHome, mods == Cmd && key == KeyUp && runtime.GOOS == "darwin":
+	case (mods == 0 || mods == Cmd) && key == KeyHome, mods == Cmd && key == KeyUp && platform.MacKeys:
 		dy = -far
-	case (mods == 0 || mods == Cmd) && key == KeyEnd, mods == Cmd && key == KeyDown && runtime.GOOS == "darwin":
+	case (mods == 0 || mods == Cmd) && key == KeyEnd, mods == Cmd && key == KeyDown && platform.MacKeys:
 		dy = far
 	default:
 		return false
@@ -1188,7 +1243,10 @@ func (rt *engine) keyDownPhysical(mods Modifiers, key, physical Key, code KeyCod
 	}
 	rt.keys = append(rt.keys, k)
 	rt.requestFrame()
-	return false
+	// The keys that go back, which a shortcut takes in the next frame:
+	// the system leaves them alone then, as Android's back then goes back
+	// in the app rather than out of it.
+	return (key == KeyBack || key == KeyEscape) && mods == 0 && rt.claimed(k)
 }
 
 // typePause is how long after a letter typed to choose a row the next
@@ -1526,6 +1584,15 @@ func (rt *engine) updateTextInput() {
 		t.Active, t.NoInputMethod = true, s.noIME
 		r := transformRect(s.world, Rect{s.x + s.caret.X, s.y + s.caret.Y, s.caret.W, s.caret.H})
 		t.Caret = rt.toWindow(platform.RectF{X: float64(r.X), Y: float64(r.Y), W: float64(r.W), H: float64(r.H)})
+	}
+	if t.Active {
+		if s := rt.states[rt.focused]; s != nil {
+			t.Traits = s.traits
+			if s.editor != nil {
+				t.Traits.Multiline, t.Traits.Secure = s.editor.multiline, s.editor.password
+			}
+		}
+		t.ShowKeyboard = rt.ime.show
 	}
 	if t != rt.ime.state {
 		if t.Client != rt.ime.state.Client {
@@ -1871,10 +1938,14 @@ func (e *node) focus(reveal bool) {
 }
 
 // AutoFocus gives the element the keyboard focus in the frame it appears,
-// as the first field of a dialog.
-func (e *node) AutoFocus() *node {
+// as the first field of a dialog. Its options, as Focus's, keep the scroll
+// where the user left it with PreventScroll.
+func (e *node) AutoFocus(options ...FocusOptions) *node {
+	if len(options) > 1 {
+		panic("ui: AutoFocus takes at most one FocusOptions")
+	}
 	if e.hasState() && e.st.born == e.c.rt.frame {
-		e.Focus()
+		e.Focus(options...)
 	}
 	return e
 }

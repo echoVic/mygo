@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/egoist/mygo/internal/platform"
 )
@@ -34,22 +35,52 @@ import (
 //	})
 //
 // The menu takes the focus as it opens and gives it back as it closes, to
-// the element that had it. Up and Down move among its items, past those
-// disabled, as do Home, End and typing the first letters of an item;
-// Right opens a submenu and Left closes it, the other way round right to
-// left (Direction); Enter and Space choose an item, Escape closes the
-// submenu on top, and a press outside the menu closes it. It shows below
-// and after where it opened, and on the other side where the window has
-// no room. Assistive technology sees a menu of items, check box items and
-// radio items, as the system's. ContextMenuBase is such a menu without a
-// look, for items of a layout of one's own.
+// the element that had it. Up and Down move among its items, as do Home,
+// End and typing the first letters of an item: past those disabled, as
+// macOS's and Linux's menus do, and onto them on Windows, as its menus do.
+// A disabled item shows its Tooltip as the pointer rests on it, and
+// choosing it does nothing. Right opens a submenu and Left closes it, the
+// other way round right to left (Direction); Enter and Space choose an
+// item, Escape closes the submenu on top, and a press outside the menu
+// closes it. It shows below and after where it opened, and on the other
+// side where the window has no room. Assistive technology sees a menu of
+// items, check box items and radio items, as the system's. ContextMenuBase
+// is such a menu without a look, for items of a layout of one's own.
 //
 // PopoverMenuButton draws the menu of a menu button so.
-func (e *node) PopoverMenu(build func(m *Menu)) *node {
+//
+// Its options style the panel of the menu and of its submenus, and the
+// rows of their items, as a menu button's (PopoverMenuOptions): a context
+// menu that unfolds from where it opened, as the app's drawn menu buttons
+// do.
+func (e *node) PopoverMenu(build func(m *Menu), options ...PopoverMenuOptions) *node {
+	if len(options) > 1 {
+		panic("ui: PopoverMenu takes at most one PopoverMenuOptions")
+	}
+	var o PopoverMenuOptions
+	if len(options) > 0 {
+		o = options[0]
+	}
 	e.flags |= flagContextMenu
 	e.buildMenu(false, true, build)
+	if d := e.c.rt.menu.drawn; d != nil && d.id == e.id {
+		d.panel, d.item = o.Panel, o.Item
+	}
 	e.c.rt.drawMenu(e, build)
 	return e
+}
+
+// PopoverMenuOptions are how a context menu MyGo draws in the window
+// (PopoverMenu) looks. The zero options give it the theme's look.
+type PopoverMenuOptions struct {
+	// Panel, when set, styles the panel of the menu and of each submenu
+	// that opens, after the theme's look and with the same calls, as
+	// PopoverMenuButtonOptions.Panel does a menu button's: it sets no
+	// margin and adds no children, and the menu keeps its place.
+	Panel func(panel Element)
+	// Item, when set, styles the row of each item of the menu and of its
+	// submenus, after the theme's look, as PopoverMenuButtonOptions.Item.
+	Item func(item Element)
 }
 
 // PopoverMenuButton makes the element a menu button, as Menu does, whose
@@ -269,17 +300,28 @@ type menuShown struct {
 	// pointer is where the pointer was when it last moved the highlight:
 	// it moves it again once it moves.
 	pointer [2]float32
+	// last is where the pointer was as the menu last built, and aim, while
+	// the pointer heads for a submenu open (aiming), when the item under it
+	// takes the highlight unless it moves on toward the submenu.
+	last [2]float32
+	aim  time.Time
 }
 
 // menuLevel is a menu that shows: the item, by its element, whose submenu
 // it is, 0 for the menu, and the item highlighted, 0 for none, or the
 // first that can be chosen once built when first is set, or the last when
 // last is too; it scrolls into
-// view when reveal is set, as the keys moved to it.
+// view when reveal is set, as the keys moved to it. panel is its panel's
+// element, as last built.
 type menuLevel struct {
-	sub, hi             uint64
+	sub, hi, panel      uint64
 	first, last, reveal bool
 }
+
+// menuAimGrace is how long the pointer heading for a submenu across the
+// items of the menu holding it keeps the submenu open after its last move
+// toward it (aiming), as in macOS's menus and Radix's.
+const menuAimGrace = 300 * time.Millisecond
 
 type menuKey struct{}
 
@@ -323,7 +365,9 @@ func (s *menuShown) openAt(rt *engine, b Rect) {
 // Right opens a submenu and Left closes it, the other way round right to
 // left (Direction); Enter and Space choose an item, Escape closes the
 // submenu on top, and Tab and a press outside the menu close it. The
-// pointer highlights the item it moves onto, opening its submenu.
+// pointer highlights the item it moves onto, opening its submenu, but for
+// those it crosses heading for a submenu that shows, which stays open
+// until the pointer rests on one of them (menuAimGrace).
 // Assistive technology sees a menu button, expanded while its menu shows,
 // and a menu of items, check box items and radio items. PopoverMenuButton
 // draws its menu with these parts, in the theme's look.
@@ -436,6 +480,7 @@ func (m *menuParts) Popup(fn func(panel *node)) *node {
 	if m.button {
 		m.Trigger.expanded = *m.open
 	}
+	s.last = [2]float32{rt.pointerX, rt.pointerY}
 	return root
 }
 
@@ -447,6 +492,12 @@ func (m *menuParts) panel(level int, anchor *node, fn func(panel *node)) *node {
 	panel.widget = "Menu"
 	// Presses on it stay in it; items past the room the window has scroll.
 	panel.flags |= flagFocusable | flagClickable | flagTypeSelect | flagOwnRing | flagScrollY | flagHover
+	if level+1 < len(s.levels) {
+		// With a submenu open, the moves over it build the menu, which
+		// follows where the pointer heads (aiming).
+		panel.flags |= flagTrackPointer
+	}
+	s.levels[level].panel = panel.id
 	switch {
 	case level == 0 && s.below:
 		at, self := s.buttonAnchors()
@@ -476,19 +527,19 @@ func (m *menuParts) panel(level int, anchor *node, fn func(panel *node)) *node {
 // the menu, unless KeepOpen. Give it children; Disabled leaves it out of
 // the keys' way and of the pointer's. Assistive technology sees a menu
 // item.
-func (m *menuParts) Item() *node { return m.item(RoleMenuItem, false) }
+func (m *menuParts) Item() *node { return m.item(RoleMenuItem, false, false) }
 
 // CheckItem creates an item, as Item does, that assistive technology sees
 // as a check box item, checked while checked is set: flip what it shows
 // when it is Clicked.
 func (m *menuParts) CheckItem(checked bool) *node {
-	return m.item(RoleMenuItemCheckBox, false).Checked(checked)
+	return m.item(RoleMenuItemCheckBox, false, false).Checked(checked)
 }
 
 // RadioItem creates an item, as Item does, that assistive technology sees
 // as a radio item, the one chosen of its group while selected is set.
 func (m *menuParts) RadioItem(selected bool) *node {
-	return m.item(RoleMenuItemRadio, false).Checked(selected)
+	return m.item(RoleMenuItemRadio, false, false).Checked(selected)
 }
 
 // SubmenuItem creates an item, as Item does, that opens a submenu instead
@@ -496,7 +547,7 @@ func (m *menuParts) RadioItem(selected bool) *node {
 // Right, Enter or Space while it is highlighted. Build the submenu with
 // Submenu. Assistive technology sees a menu item that expands, expanded
 // while its submenu shows.
-func (m *menuParts) SubmenuItem() *node { return m.item(RoleMenuItem, true) }
+func (m *menuParts) SubmenuItem() *node { return m.item(RoleMenuItem, true, false) }
 
 // Group creates a group of the items that fn builds in the menu being
 // built, a row that fn styles: the keys take it as one item, Up and Down
@@ -559,12 +610,29 @@ func (m *menuParts) Submenu(item *node, fn func(panel *node)) {
 	b.subs = append(b.subs, submenu{item, fn})
 }
 
+// menusReachUnavailable tells whether the keys and the pointer move onto a
+// drawn menu's item that cannot be chosen, as Windows' menus do; macOS's
+// and Linux's skip it, as Qt's styles for each do
+// (SH_Menu_AllowActiveAndDisabled). Its tooltip shows under the pointer
+// either way.
+var menusReachUnavailable = runtime.GOOS == "windows"
+
+// reachedInMenu reports whether the keys and the pointer move onto the
+// item: one that cannot be chosen only where menusReachUnavailable.
+func (e *node) reachedInMenu() bool { return !e.unavailable || menusReachUnavailable }
+
 // item creates an item of the menu being built, with role, opening a
-// submenu when sub is set.
-func (m *menuParts) item(role Role, sub bool) *node {
+// submenu when sub is set, and one that cannot be chosen when unavailable
+// is: a drawn menu's disabled item, AccessDisabled and dimmed as if
+// Disabled, which stays under the pointer for its tooltip to say why.
+func (m *menuParts) item(role Role, sub, unavailable bool) *node {
 	c := m.c
 	row := coreRow(c).Role(role)
 	row.flags |= flagClickable | flagHover
+	if unavailable {
+		row.AccessDisabled(true)
+		row.unavailable = true
+	}
 	if m.level < 0 {
 		return row // outside a menu: an item of none
 	}
@@ -572,7 +640,7 @@ func (m *menuParts) item(role Role, sub bool) *node {
 	b := &m.built[level]
 	b.items = append(b.items, row)
 	lv := &s.levels[level]
-	if lv.first && !row.disabled() {
+	if lv.first && !row.disabled() && row.reachedInMenu() {
 		lv.hi, lv.first, b.first = row.id, false, true
 	}
 	open := sub && level+1 < len(s.levels) && s.levels[level+1].sub == row.id
@@ -583,27 +651,38 @@ func (m *menuParts) item(role Role, sub bool) *node {
 	if row.disabled() || m.closed {
 		return row
 	}
-	if m.moved && row.Hovered() {
+	// A disabled submenu item (unavailable) never opens its submenu.
+	opens := sub && !row.unavailable
+	if m.moved && row.Hovered() && !m.aiming(level, row.id) {
 		// The pointer moved onto it: it is highlighted, and its submenu
 		// opens while those of the others close. The keys go on from it,
-		// and the focus is the pointer's again, as it shows no ring.
+		// and the focus is the pointer's again, as it shows no ring. One the
+		// keys skip highlights nothing and closes the submenu open, as Qt's
+		// menus do; its tip still shows.
 		m.moved = false
 		rt.focusVisible = false
-		s.pointer = [2]float32{rt.pointerX, rt.pointerY}
+		s.pointer, s.aim = [2]float32{rt.pointerX, rt.pointerY}, time.Time{}
 		switch {
-		case sub && !open:
+		case !row.reachedInMenu():
+			if lv.hi != 0 || len(s.levels) > level+1 {
+				m.highlight(level, 0)
+			}
+		case opens && !open:
 			m.highlight(level, row.id)
 			m.openSubmenu(level, row.id, false)
-		case !sub && (lv.hi != row.id || len(s.levels) > level+1):
+		case !opens && (lv.hi != row.id || len(s.levels) > level+1):
 			m.highlight(level, row.id)
 		}
-		if rt.focused == row.id || !rt.within(rt.focused, row.id) {
+		if row.reachedInMenu() && (rt.focused == row.id || !rt.within(rt.focused, row.id)) {
 			// The menu takes the focus back, but from an element inside
 			// the item, as a text input of its content.
 			s.focus = level
 		}
 	}
-	if row.Clicked() {
+	if !row.reachedInMenu() {
+		return row
+	}
+	if !row.unavailable && row.Clicked() {
 		if sub {
 			m.highlight(level, row.id)
 			m.openSubmenu(level, row.id, false)
@@ -615,6 +694,61 @@ func (m *menuParts) item(role Role, sub bool) *node {
 		}
 	}
 	return row
+}
+
+// aiming reports whether the pointer, on the item id of the menu at level
+// whose submenu open is another's, heads for that submenu, which then stays
+// open with the highlight where it is (#1916): it moved toward the
+// submenu since the menu last built, into the triangle between where it
+// was and the submenu's near edge, on the side the submenu opened to.
+// That holds for menuAimGrace after its last such move: once the pointer
+// rests, or moves elsewhere, the item under it takes the highlight.
+func (m *menuParts) aiming(level int, id uint64) bool {
+	rt, s := m.c.rt, m.s
+	if level+1 >= len(s.levels) || s.levels[level+1].sub == id {
+		return false
+	}
+	now := m.c.now
+	if p := [2]float32{rt.pointerX, rt.pointerY}; p != s.last {
+		s.aim = time.Time{}
+		if st := rt.states[s.levels[level+1].panel]; st != nil && st.w > 0 && st.h > 0 && towardSubmenu(st, s.last, p) {
+			s.aim = now.Add(menuAimGrace)
+		}
+	}
+	if s.aim.IsZero() || !now.Before(s.aim) {
+		s.aim = time.Time{}
+		return false
+	}
+	// Checked again then, if the pointer moves no more.
+	rt.scheduleAt(s.aim)
+	return true
+}
+
+// towardSubmenu reports whether the pointer, moving from the window's
+// point from to to, heads for the submenu whose panel is st: it lies in the
+// triangle from where it was to the corners of the panel's edge facing it.
+func towardSubmenu(st *state, from, to [2]float32) bool {
+	px, py := st.local(from[0], from[1])
+	cx, cy := st.local(to[0], to[1])
+	var edge float32 // the panel's near edge: its left, opened to the right
+	switch {
+	case px < 0:
+	case px > st.w:
+		edge = st.w // opened to the left
+	default:
+		return false // over it, or beside it, which no triangle leads to
+	}
+	if (cx-px)*(edge-px) <= 0 {
+		return false // not toward it
+	}
+	// On the same side of each of the triangle's sides as its third corner.
+	side := func(ax, ay, bx, by, x, y float32) float32 { return (bx-ax)*(y-ay) - (by-ay)*(x-ax) }
+	d1 := side(px, py, edge, 0, cx, cy)
+	d2 := side(edge, 0, edge, st.h, cx, cy)
+	d3 := side(edge, st.h, px, py, cx, cy)
+	neg := d1 < 0 || d2 < 0 || d3 < 0
+	pos := d1 > 0 || d2 > 0 || d3 > 0
+	return !(neg && pos)
 }
 
 // finish ends the menu at level once its items are built: its highlight,
@@ -649,7 +783,7 @@ func (m *menuParts) finish(level int) {
 			pos++
 			it.setPos, it.setSize = pos, loose
 		}
-		if !it.IsDisabled() {
+		if !it.IsDisabled() && it.reachedInMenu() {
 			choices = append(choices, it)
 			groups = append(groups, group[i])
 		}
@@ -658,7 +792,7 @@ func (m *menuParts) finish(level int) {
 		}
 	}
 	stops := menuStops(choices, groups)
-	if hi != nil && hi.IsDisabled() || lv.first || b.first {
+	if hi != nil && (hi.IsDisabled() || !hi.reachedInMenu()) || lv.first || b.first {
 		// The first item to be chosen, which an item disabled after it was
 		// built is not, and of a group its item checked; the items build
 		// again unless it is the one highlighted as they were built.
@@ -809,7 +943,7 @@ func (m *menuParts) keys(level int, panel *node, choices []*node, groups, stops 
 	case grouped && panel.Shortcut(0, out):
 		within(-1)
 	case panel.Shortcut(0, into):
-		if at >= 0 && choices[at].expandable {
+		if at >= 0 && choices[at].expandable && !choices[at].unavailable {
 			m.openSubmenu(level, choices[at].id, true)
 		}
 	case panel.Shortcut(0, out):
@@ -819,7 +953,7 @@ func (m *menuParts) keys(level int, panel *node, choices []*node, groups, stops 
 	case panel.Shortcut(0, KeyEnter), panel.Shortcut(0, KeySpace):
 		switch {
 		case at < 0:
-		case choices[at].expandable:
+		case choices[at].expandable && !choices[at].unavailable:
 			m.openSubmenu(level, choices[at].id, true)
 		default:
 			// The item reports Clicked in the next pass, which builds it
@@ -1046,7 +1180,7 @@ func (rt *engine) drawnMenuBuilt(e *node, d *drawnMenu, m *Menu) *platform.MenuI
 			mi := run.items[it.ID-1]
 			row := parts.drawnItem(d, it, mi, marks, icons)
 			refs[row.id] = menuRef{seq: it.ID, label: it.Label, key: mi.key}
-			if sub := it.Submenu; it.Type == platform.MenuItemSubmenu && sub != nil {
+			if sub := it.Submenu; it.Type == platform.MenuItemSubmenu && sub != nil && it.Enabled {
 				parts.Submenu(row, func(panel *node) {
 					w, ok := run.widths[sub]
 					if !ok {
@@ -1056,7 +1190,7 @@ func (rt *engine) drawnMenuBuilt(e *node, d *drawnMenu, m *Menu) *platform.MenuI
 					panel.Margin(-t.Space(1)-1, 0, 0, 0)
 					items(sub, w)
 				})
-			} else if row.Clicked() {
+			} else if !row.unavailable && row.Clicked() {
 				chosen = it
 			}
 		}
@@ -1170,19 +1304,20 @@ func (m *menuParts) drawnItem(d *drawnMenu, it *platform.MenuItem, mi *MenuItem,
 		// The row is the item's wherever it goes among the others.
 		c.nextKey, c.keySet = menuItemKey{mi.key}, true
 	}
+	off := !it.Enabled
 	var row *node
 	switch {
 	case sub:
-		row = m.SubmenuItem()
+		row = m.item(RoleMenuItem, true, off)
 	case it.Type == platform.MenuItemCheckbox:
-		row = m.CheckItem(it.Checked)
+		row = m.item(RoleMenuItemCheckBox, false, off).Checked(it.Checked)
 	case it.Type == platform.MenuItemRadio:
-		row = m.RadioItem(it.Checked)
+		row = m.item(RoleMenuItemRadio, false, off).Checked(it.Checked)
 	default:
-		row = m.Item()
+		row = m.item(RoleMenuItem, false, off)
 	}
 	row.AlignItems(Center).Gap(t.Space(2)).Padding(t.Space(1.5), t.Space(2)).Radius(t.Radius).Shrink(0)
-	row.Label(it.Label).Disabled(!it.Enabled)
+	row.Label(it.Label)
 	// Assistive technology reads the subtitle, the trailing text and the
 	// tooltip, if any, as the item's description, and the shortcut as its
 	// keys.
@@ -1200,6 +1335,9 @@ func (m *menuParts) drawnItem(d *drawnMenu, it *platform.MenuItem, mi *MenuItem,
 	case !it.Enabled:
 		color = t.TextMuted
 		row.TextColor(color)
+		if row.highlighted {
+			row.Background(t.SurfaceHover)
+		}
 	case row.highlighted && row.expanded && m.s.levels[m.level+1].hi != 0:
 		// The way to the item highlighted in the submenu.
 		row.Background(t.SurfaceHover).TextColor(color)
@@ -1325,7 +1463,7 @@ func shortcutText(a string) string {
 		key = strings.ToUpper(key)
 	}
 	var b strings.Builder
-	if runtime.GOOS == "darwin" {
+	if platform.MacKeys {
 		// In the order of macOS's menus.
 		for _, m := range [...][2]string{{"Ctrl", "⌃"}, {"Alt", "⌥"}, {"Shift", "⇧"}, {"Super", "⌘"}} {
 			if slices.Contains(mods, m[0]) {

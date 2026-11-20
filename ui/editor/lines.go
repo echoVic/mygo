@@ -108,7 +108,32 @@ func (ed *editor) moveLines(dir int) bool {
 	// The text is as long after: a selection through the newline of lines
 	// that become the last ends with them.
 	end := r.Len()
-	ok := ed.apply(edits, editOther, func(move func(int, bias) int) []sel {
+	// Each line takes its ending with it: the breaks of an edit end, in
+	// order, the lines it puts in, the one after it the last of them.
+	ends := func(e lineEnds) []string {
+		n := e.codes.Len()
+		codes := make([]string, len(spans))
+		for i, sp := range spans {
+			inner := e.codes.Slice(sp.from, sp.to) // the block's
+			if dir < 0 {
+				// The block, then the line above it.
+				if sp.to < n {
+					codes[i] = inner + string(e.at(sp.to)) + string(e.at(sp.from-1))
+				} else {
+					codes[i] = inner + string(e.at(sp.from-1)) // the last line
+				}
+				continue
+			}
+			// The line below, then the block.
+			if sp.to+1 < n {
+				codes[i] = string(e.at(sp.to+1)) + inner + string(e.at(sp.to))
+			} else {
+				codes[i] = string(e.at(sp.to)) + inner // the last line
+			}
+		}
+		return codes
+	}
+	ok := ed.applyEnds(edits, ends, editOther, func(move func(int, bias) int) []sel {
 		for i := range sels {
 			s := &sels[i]
 			for _, sh := range shifts {
@@ -348,13 +373,16 @@ func (ed *editor) toggleComment() bool {
 	spans := ed.selLines()
 	for _, sp := range spans {
 		minIndent := -1
-		all := true
+		// all is whether the lines are comments already, to take the prefix
+		// off: false for blank lines alone, which have none to take off.
+		all, any := true, false
 		for line := sp.from; line <= sp.to; line++ {
 			s := r.Line(line)
 			t := strings.TrimLeft(s, " \t")
 			if t == "" {
 				continue
 			}
+			any = true
 			if !strings.HasPrefix(t, prefix) {
 				all = false
 			}
@@ -362,6 +390,7 @@ func (ed *editor) toggleComment() bool {
 				minIndent = n
 			}
 		}
+		all = all && any
 		if minIndent < 0 {
 			minIndent = len(indentOf(r.Line(sp.from)))
 		}

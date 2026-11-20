@@ -125,6 +125,37 @@ func (o SpringOptions) physics() (m, k, c, eps float64) {
 	return m, k, c, eps
 }
 
+// Progress returns where a spring of o going from 0 to 1 is after t: 0
+// at its start, past 1 where it overshoots, 1 once it rests. It follows
+// the trajectory of the values Spring and AnimateTo move, for values that
+// time sets rather than a target, as a video's frames do
+// (plugins/render). Velocity is the value's at the start, in units of
+// the distance a second.
+func (o SpringOptions) Progress(t time.Duration) float64 {
+	m, k, c, _ := o.physics()
+	if t <= 0 {
+		return 0
+	}
+	x, _ := solveSpring(-1, float64(o.Velocity), m, k, c, t.Seconds())
+	return 1 + x
+}
+
+// SettleTime returns how long a spring of o going from 0 to 1 takes to
+// come to rest, where the values Spring moves stop: within Precision of 1,
+// and as slow as that, to the millisecond, at most a minute.
+func (o SpringOptions) SettleTime() time.Duration {
+	m, k, c, eps := o.physics()
+	x, v := -1.0, float64(o.Velocity)
+	const step = time.Millisecond
+	for t := step; t <= time.Minute; t += step {
+		x, v = solveSpring(x, v, m, k, c, step.Seconds())
+		if math.Abs(x) <= eps && math.Abs(v) <= eps*math.Sqrt(k/m) {
+			return t
+		}
+	}
+	return time.Minute
+}
+
 // finiteMotion panics unless the values of what are finite.
 func finiteMotion(what string, v ...float64) {
 	for _, n := range v {
@@ -580,6 +611,12 @@ func (e *node) InViewAmount(amount float32, margin ...float32) bool {
 func (rt *engine) visibleWithin(s *state, m [4]float32) Rect {
 	w, h, _ := rt.size()
 	v := intersect(transformRect(s.world, Rect{s.x, s.y, s.w, s.h}), outset(Rect{0, 0, w, h}, m))
+	return rt.clipAncestors(s, v, m)
+}
+
+// clipAncestors intersects v with the clips of the ancestors around s up to
+// a lifted layer, growing scroll containers by m.
+func (rt *engine) clipAncestors(s *state, v Rect, m [4]float32) Rect {
 	// The clips around an element flying stop at it, as it paints out of
 	// them (contains).
 	for p := rt.states[s.parent]; p != nil && !s.lifted && v.W > 0 && v.H > 0; p = rt.states[p.parent] {
