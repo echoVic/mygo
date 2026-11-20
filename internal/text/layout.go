@@ -1,6 +1,7 @@
 package text
 
 import (
+	"bytes"
 	"cmp"
 	"encoding/binary"
 	"image"
@@ -97,9 +98,19 @@ type Params struct {
 	// paragraph as fit Width beside the ellipsis, about as wide on each
 	// side, as a path keeps its first folders and its file's name. Where
 	// the paragraph fits, and only the text after it is cut, or without a
-	// width, the ellipsis ends the line all the same. It takes effect once
-	// System.UseTruncateMiddle was called.
+	// width, the ellipsis ends the line all the same. TruncateStart, with
+	// it, cuts the start instead. It takes effect once
+	// System.UseTruncateMiddle or UseTruncateStart was called.
 	TruncateMiddle bool
+	// TruncateStart puts the Ellipsis of a text that MaxLines cuts at the
+	// start of its last line rather than at its end: the line keeps as
+	// many of the graphemes ending its paragraph as fit Width beside the
+	// ellipsis, as a path keeps its file's name and the folders nearest
+	// it. Where the paragraph fits, and only the text after it is cut, or
+	// without a width, the ellipsis ends the line all the same. With
+	// TruncateMiddle too, the start is cut. It takes effect once
+	// System.UseTruncateStart or UseTruncateMiddle was called.
+	TruncateStart bool
 	// NoWrap breaks lines only at newlines, aligning them within Width
 	// all the same.
 	NoWrap bool
@@ -179,6 +190,12 @@ type Span struct {
 	// box-decoration-break: clone: the glyphs move in, and the line, which
 	// breaks to fit it, is that much wider.
 	PaddingX float32
+	// PaddingStart widens the span that many DIPs more at the start of
+	// each line's piece of it, past PaddingX, as CSS's
+	// padding-inline-start: the left of a left-to-right piece, the right
+	// of a right-to-left one. Room for an icon drawn before the span, a
+	// link's site's.
+	PaddingStart float32
 }
 
 // style returns the style of the span's runes in a text of style base.
@@ -236,12 +253,18 @@ func EncodeSpans(spans []Span) string {
 		if sp.PaddingX != 0 {
 			flags |= 8
 		}
+		if sp.PaddingStart != 0 {
+			flags |= 16
+		}
 		b = append(b, flags)
 		if sp.BaselineShift != 0 {
 			b = binary.LittleEndian.AppendUint32(b, math.Float32bits(sp.BaselineShift))
 		}
 		if sp.PaddingX != 0 {
 			b = binary.LittleEndian.AppendUint32(b, math.Float32bits(sp.PaddingX))
+		}
+		if sp.PaddingStart != 0 {
+			b = binary.LittleEndian.AppendUint32(b, math.Float32bits(sp.PaddingStart))
 		}
 		b = binary.LittleEndian.AppendUint32(b, math.Float32bits(sp.LetterSpacing))
 		str(sp.Features)
@@ -306,6 +329,9 @@ func DecodeSpans(s string) []Span {
 		}
 		if flags&8 != 0 {
 			sp.PaddingX = f32()
+		}
+		if flags&16 != 0 {
+			sp.PaddingStart = f32()
 		}
 		sp.LetterSpacing = f32()
 		sp.Features = str()
@@ -421,8 +447,15 @@ type System struct {
 	familiesGen uint64
 	// lang is the language of texts whose style names none (SetLanguage).
 	lang string
+	// apart is a System New made, which takes the app's fonts
+	// (RegisterAppFont) itself: appFonts of them so far.
+	apart    bool
+	appFonts int
 	// fonts caches the font of each style.
 	fonts map[Style]*Font
+	// watchers hear of the fonts that loaded in the background, in
+	// browsers (WatchFonts).
+	watchers map[*func()]func()
 
 	// Layouts are kept by recency within a memory budget, not by how
 	// many frames a scrolling window has drawn.
@@ -483,9 +516,10 @@ type System struct {
 	// tabs is tabStop once UseTabSize was called, so that apps that never
 	// set a tab size do not link it.
 	tabs func(s *System, style Style) float32
-	// middle is ellipsizeMiddle once UseTruncateMiddle was called, so
-	// that apps that never cut text in its middle do not link it.
-	middle func(s *System, text []rune, spans []Span, start int, p Params, width float32, rtl bool) (shapedLine, bool)
+	// inside is ellipsizeInside once UseTruncateMiddle or
+	// UseTruncateStart was called, so that apps that only cut text at its
+	// end do not link it.
+	inside func(s *System, text []rune, spans []Span, start int, p Params, width float32, rtl bool) (shapedLine, bool)
 }
 
 type markKey struct {
@@ -509,7 +543,7 @@ type cached struct {
 var shared = sync.OnceValue(newSystem)
 
 func newSystem() *System {
-	return &System{
+	s := &System{
 		fonts:     map[Style]*Font{},
 		layouts:   map[Params]*cached{},
 		marks:     map[markKey]float32{},
@@ -519,11 +553,16 @@ func newSystem() *System {
 		masks:     map[uint64]*atlasEntry{},
 		transient: map[uint64]GlyphImage{},
 		recent:    map[uint64]uint64{},
-		MaskAtlas: scene.NewAtlas(1, 256, 256),
-		// Most interfaces have no color or subpixel glyphs. Keep just a
-		// transparent texel until one asks for room.
-		ColorAtlas: scene.NewAtlas(4, 1, 1),
 	}
+	s.MaskAtlas, s.ColorAtlas = newAtlases()
+	return s
+}
+
+// newAtlases returns the glyph atlases a System starts with.
+func newAtlases() (mask, color *scene.Atlas) {
+	// Most interfaces have no color or subpixel glyphs. Keep just a
+	// transparent texel until one asks for room.
+	return scene.NewAtlas(1, 256, 256), scene.NewAtlas(4, 1, 1)
 }
 
 // Shared returns the process-wide text system.
@@ -534,7 +573,118 @@ func Shared() *System { return shared() }
 // that draw at the same time, as Testers do in parallel tests, neither
 // race over nor invalidate each other's atlases. An app's windows share
 // Shared.
-func New() *System { return newSystem() }
+func New() *System {
+	s := newSystem()
+	s.apart = true
+	return s
+}
+
+// Reuse readies a System New made, which a window drew in, for another
+// window, as a Tester takes the one an earlier Tester left (package ui
+// keeps them): what it made that depends on no window stays, so that the
+// next window need not make it again: its engine with the fonts it
+// found, the text it laid out, the widths of its ellipses. What the window
+// set goes, its language, and so do the glyph atlases: they start empty,
+// as a new System's, so that the next window fills them as it would a new
+// System's, through the same growth and room made. The window must have
+// set nothing else (SetUIFamily, SetFontRendering), as a Tester's sets
+// nothing else; the Use functions it called stay, which only let layouts
+// do what their Params ask for.
+func (s *System) Reuse() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lang != "" {
+		s.lang = ""
+		s.gen++
+		s.clearLayouts()
+		clear(s.marks)
+	}
+	// What the engine keeps of the last window's shaping (Core Text's
+	// typesetters) goes, as when windows go idle, and the layouts kept count
+	// as unused by the frames to come, as none of the next window's drew
+	// them: they don't take its live budget.
+	if k, ok := s.eng.(shapingKeeper); ok {
+		k.releaseShaping()
+	}
+	s.frame += liveLayoutFrames
+	s.MaskAtlas, s.ColorAtlas = newAtlases()
+	clear(s.glyphs)
+	clear(s.runs)
+	clear(s.masks)
+	clear(s.transient)
+	clear(s.recent)
+	s.forgetLeftOut()
+	s.rooms = 0
+}
+
+// appFonts are the fonts the app registered for all its text
+// (RegisterAppFont), which each System New makes takes in turn, each
+// once: register serializes RegisterAppFont, which leaves out a font
+// already there.
+var appFonts struct {
+	mu       sync.Mutex
+	register sync.Mutex
+	fonts    []appFontData
+}
+
+type appFontData struct {
+	data   []byte
+	family string
+}
+
+// RegisterAppFont registers a font in Shared, as its RegisterFont does,
+// and in every System New makes: before it lays out text, or at its next
+// layout when it was made before. A Tester's window, which shapes in a
+// System of its own, then draws the app's fonts as its windows do.
+//
+// Registering again the same data under the same family does nothing:
+// each System, Shared too, would otherwise register it again, as a test
+// package's Testers each would (#1902). The data is kept, and must not
+// change afterwards.
+func RegisterAppFont(data []byte, family string) error {
+	appFonts.register.Lock()
+	defer appFonts.register.Unlock()
+	if hasAppFont(data, family) {
+		return nil
+	}
+	if err := Shared().RegisterFont(data, family); err != nil {
+		return err
+	}
+	appFonts.mu.Lock()
+	appFonts.fonts = append(appFonts.fonts, appFontData{data, family})
+	appFonts.mu.Unlock()
+	return nil
+}
+
+// hasAppFont reports whether the app registered data under family
+// already (RegisterAppFont).
+func hasAppFont(data []byte, family string) bool {
+	appFonts.mu.Lock()
+	defer appFonts.mu.Unlock()
+	return slices.ContainsFunc(appFonts.fonts, func(f appFontData) bool {
+		return f.family == family && bytes.Equal(f.data, data)
+	})
+}
+
+// takeAppFonts registers in a System New made the app's fonts registered
+// since it last looked (RegisterAppFont). s.mu is held.
+func (s *System) takeAppFonts() {
+	if !s.apart {
+		return
+	}
+	appFonts.mu.Lock()
+	fonts := appFonts.fonts[s.appFonts:]
+	s.appFonts = len(appFonts.fonts)
+	appFonts.mu.Unlock()
+	if len(fonts) == 0 {
+		return
+	}
+	for _, f := range fonts {
+		// Shared's engine read it already.
+		_ = s.engine().register(f.data, f.family)
+	}
+	s.fontsChanged()
+}
 
 // engine starts the system's text engine on first use.
 func (s *System) engine() engine {
@@ -547,6 +697,7 @@ func (s *System) engine() engine {
 			r := s.rendering
 			f.setFontRendering(r[0], r[1], r[2])
 		}
+		s.hearFontLoads()
 	}
 	return s.eng
 }
@@ -686,7 +837,16 @@ func (s *System) UseTabSize() {
 func (s *System) UseTruncateMiddle() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.middle = (*System).ellipsizeMiddle
+	s.inside = (*System).ellipsizeInside
+}
+
+// UseTruncateStart lets layouts cut text at its start
+// (Params.TruncateStart), which package ui calls as an element asks for
+// it.
+func (s *System) UseTruncateStart() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.inside = (*System).ellipsizeInside
 }
 
 // RegisterFont adds a TrueType or OpenType font (or collection) to the
@@ -698,6 +858,13 @@ func (s *System) RegisterFont(data []byte, family string) error {
 	if err := s.engine().register(data, family); err != nil {
 		return err
 	}
+	s.fontsChanged()
+	return nil
+}
+
+// fontsChanged forgets what the fonts registered so far made. s.mu is
+// held.
+func (s *System) fontsChanged() {
 	// The system's families may hold the app's under their own names.
 	s.families, s.listed = nil, false
 	s.familiesGen++
@@ -705,7 +872,6 @@ func (s *System) RegisterFont(data []byte, family string) error {
 	clear(s.fonts)
 	s.clearLayouts()
 	clear(s.marks)
-	return nil
 }
 
 // A FontFamily is a font family text can use.
@@ -724,6 +890,7 @@ type FontFamily struct {
 // system's are listed once, outside the lock, and kept until RegisterFont.
 func (s *System) FontFamilies() []FontFamily {
 	s.mu.Lock()
+	s.takeAppFonts()
 	app := s.engine().appFamilies()
 	system, listed, gen := s.families, s.listed, s.familiesGen
 	var list func() []FontFamily
@@ -777,6 +944,28 @@ func (s *System) Preload() {
 	s.font(Style{})
 }
 
+// forgetAll lets go of the fonts and what refers to them.
+func (s *System) forgetAll(f fontForgetter) {
+	s.gen++
+	s.clearLayouts()
+	clear(s.marks)
+	clear(s.fonts)
+	clear(s.glyphs)
+	clear(s.places)
+	clear(s.runs)
+	f.forgetFonts()
+}
+
+// Forget lets go of what the System can make again: layouts, fonts, glyphs,
+// as the system runs short of memory.
+func (s *System) Forget() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if f, ok := s.eng.(fontForgetter); ok {
+		s.forgetAll(f)
+	}
+}
+
 // EndFrame forgets layouts no frame used for a while. The ui package calls
 // it after each frame.
 func (s *System) EndFrame() {
@@ -803,14 +992,7 @@ func (s *System) EndFrame() {
 		// glyphs as it makes room; the next frame lays out and draws its
 		// text anew. Layouts kept elsewhere keep their Fonts, which still
 		// draw, and go once nothing refers to them.
-		s.gen++
-		s.clearLayouts()
-		clear(s.marks)
-		clear(s.fonts)
-		clear(s.glyphs)
-		clear(s.places)
-		clear(s.runs)
-		f.forgetFonts()
+		s.forgetAll(f)
 		return
 	}
 	for s.oldest != nil && s.overLayoutBudget(0) {
@@ -844,6 +1026,7 @@ func (s *System) Layout(p Params) *Layout { return s.LayoutFrom(nil, p) }
 func (s *System) LayoutFrom(l *Layout, p Params) *Layout {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.takeAppFonts()
 	if c, ok := s.layouts[p]; ok {
 		s.useLayout(c)
 		return &c.layout
@@ -1100,6 +1283,7 @@ func (s *System) Generation() uint64 {
 func (s *System) Shape(p Params) *Layout {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.takeAppFonts()
 	return &s.layout(p).layout
 }
 
@@ -1107,6 +1291,7 @@ func (s *System) Shape(p Params) *Layout {
 func (s *System) Metrics(style Style) (ascent, descent, lineHeight float32) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.takeAppFonts()
 	m := metricsOf(s.font(style), style)
 	return m.ascent, m.descent, m.lineHeight
 }
@@ -1308,6 +1493,13 @@ func (s *System) paragraph(out []Line, p Params, spans []Span, runes []rune, sta
 	}
 	if len(shaped) == 0 {
 		shaped = []shapedLine{{end: len(text)}}
+	}
+	// A paragraph ending with a line separator has an empty line after it:
+	// the break moves the pen to a line of its own, which an editor shows
+	// with the caret on it. Engines that already end the paragraph with an
+	// empty line report one that starts at the text's end.
+	if len(text) > 0 && text[len(text)-1] == '\u2028' && shaped[len(shaped)-1].start < len(text) {
+		shaped = append(shaped, shapedLine{start: len(text), end: len(text)})
 	}
 	truncated := false
 	if maxLines > 0 && (len(shaped) > maxLines || len(shaped) == maxLines && continues) {
@@ -1610,11 +1802,12 @@ var ellipsis = []rune{'…'}
 
 // ellipsize lays out the paragraph text from rune start on one line ending
 // with an ellipsis: as many of its graphemes as fit width with it (all of
-// them for 0). With Params.TruncateMiddle the ellipsis stands in the
-// middle of the line instead, where ellipsizeMiddle finds room for it.
+// them for 0). With Params.TruncateMiddle or TruncateStart the ellipsis
+// stands in the middle or at the start of the line instead, where
+// ellipsizeInside finds room for it.
 func (s *System) ellipsize(text []rune, spans []Span, start int, p Params, width float32, rtl bool) shapedLine {
-	if p.TruncateMiddle && s.middle != nil && width > 0 {
-		if l, ok := s.middle(s, text, spans, start, p, width, rtl); ok {
+	if (p.TruncateMiddle || p.TruncateStart) && s.inside != nil && width > 0 {
+		if l, ok := s.inside(s, text, spans, start, p, width, rtl); ok {
 			return l
 		}
 	}
@@ -1642,10 +1835,10 @@ func (s *System) ellipsize(text []rune, spans []Span, start int, p Params, width
 			j := k
 			if pads {
 				if j = spanIndex(restSpans, cut); j != k {
-					gw += padOf(restSpans, k) + padOf(restSpans, j)
+					gw += padEnd(restSpans, k) + padBegin(restSpans, j)
 				}
 			}
-			if w+gw+padOf(restSpans, j)+ellipsis > width {
+			if w+gw+padEnd(restSpans, j)+ellipsis > width {
 				break
 			}
 			w += gw
@@ -1680,14 +1873,15 @@ func (s *System) ellipsize(text []rune, spans []Span, start int, p Params, width
 	return out
 }
 
-// ellipsizeMiddle lays out the paragraph text from rune start on one line
+// ellipsizeInside lays out the paragraph text from rune start on one line
 // with an ellipsis in its middle (Params.TruncateMiddle): as many of the
 // graphemes starting it and ending it as fit width with the ellipsis
 // between them, each going to the side that is the narrower so far, as
-// long as it fits. The line holds the runes the ellipsis hides. It
-// reports false where all of them fit, which leaves the ellipsis to end
-// the line.
-func (s *System) ellipsizeMiddle(text []rune, spans []Span, start int, p Params, width float32, rtl bool) (shapedLine, bool) {
+// long as it fits. With Params.TruncateStart the line keeps none of
+// those starting it, which puts the ellipsis at its start. The line
+// holds the runes the ellipsis hides. It reports false where all of them
+// fit, which leaves the ellipsis to end the line.
+func (s *System) ellipsizeInside(text []rune, spans []Span, start int, p Params, width float32, rtl bool) (shapedLine, bool) {
 	rest := text[start:]
 	restSpans := spansIn(spans, start, len(text))
 	mark := markOf(p)
@@ -1710,7 +1904,7 @@ func (s *System) ellipsizeMiddle(text []rune, spans []Span, start int, p Params,
 		if j == k {
 			return 0
 		}
-		return padOf(restSpans, j) + padOf(restSpans, k)
+		return padEnd(restSpans, j) + padBegin(restSpans, k)
 	}
 	advance := func(i int) float32 {
 		w := float32(0)
@@ -1730,7 +1924,7 @@ func (s *System) ellipsizeMiddle(text []rune, spans []Span, start int, p Params,
 		hj, tj := span(head), span(tail-1)
 		hw := headW + advance(head) + between(hk, hj)
 		tw := tailW + advance(tail-1) + between(tj, tk)
-		headFits := hw+tailW+between(hj, tk) <= room
+		headFits := !p.TruncateStart && hw+tailW+between(hj, tk) <= room
 		tailFits := headW+tw+between(hk, tj) <= room
 		if headFits && (headW <= tailW || !tailFits) {
 			headW, hk, head = hw, hj, head+1
@@ -1753,14 +1947,15 @@ func (s *System) ellipsizeMiddle(text []rune, spans []Span, start int, p Params,
 	}
 	t := append(append(append(s.ellipsized[:0], rest[:cut]...), mark...), rest[resume:]...)
 	s.ellipsized = t
-	// The ellipsis takes the style of the text before it, and the text
-	// after it keeps its own.
+	// The ellipsis takes the style of the text before it, or of the text
+	// after it where it starts the line, as it takes that of the text it
+	// ends at the end of one; the text after it keeps its own.
 	shift := cut + len(mark)
 	tSpans := spansIn(restSpans, 0, cut)
 	after := spansIn(restSpans, resume, len(rest))
 	if k := len(tSpans); k > 0 && tSpans[k-1].End == cut {
 		tSpans[k-1].End = shift
-	} else if len(after) > 0 {
+	} else if len(after) > 0 && cut > 0 {
 		tSpans = append(tSpans, Span{End: shift})
 	}
 	for _, sp := range after {

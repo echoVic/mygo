@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo/internal/diff"
+	"github.com/egoist/mygo/internal/wait"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -503,6 +504,137 @@ func TestDiffScrollsOverSeparator(t *testing.T) {
 	}
 }
 
+// A diff's find matches the lines it shows: the lines a gap collapses
+// hold no matches, and the matches come and go as the user expands and
+// collapses the gaps, in both layouts.
+func TestDiffFindMatchesTheShownLines(t *testing.T) {
+	var a []string
+	for i := range 600 {
+		a = append(a, "line "+strconv.Itoa(i))
+	}
+	b := append([]string(nil), a...)
+	b[0] = "changed"
+	for _, layout := range []DiffLayout{DiffSplit, DiffUnified} {
+		d := &DiffState{Old: NewBuffer(strings.Join(a, "\n")), New: NewBuffer(strings.Join(b, "\n"))}
+		d.Layout = layout
+		tt := ui.NewTester(func(c *ui.Context) { DiffView(c, d).Fill() }, 800, 600)
+		tt.Frame()
+		tt.Frame()
+		d.Find("line 500")
+		tt.Frame()
+		if ed := &d.eds[1]; len(ed.find.matches) != 0 {
+			t.Fatalf("%v: matches in the collapsed lines: %v", layout, ed.find.matches)
+		}
+		d.ExpandAll()
+		tt.Frame()
+		tt.Frame()
+		ed := &d.eds[1]
+		if len(ed.find.matches) == 0 || ed.find.matches[0].start != ed.view.text.LineStart(500) {
+			t.Fatalf("%v: no match in the lines the expand shows: %v", layout, ed.find.matches)
+		}
+		d.CollapseAll()
+		tt.Frame()
+		tt.Frame()
+		if ed := &d.eds[1]; len(ed.find.matches) != 0 {
+			t.Fatalf("%v: matches stayed over the collapsed lines: %v", layout, ed.find.matches)
+		}
+		// The shown lines keep matching: the change, in view from the start.
+		d.Find("changed")
+		tt.Frame()
+		if ed := &d.eds[1]; len(ed.find.matches) != 1 {
+			t.Fatalf("%v: the shown change matched %v, want once", layout, ed.find.matches)
+		}
+		// A regular expression's anchors hold at the shown lines' own
+		// ends: three line starts hold "line", one line ends in "3", and
+		// the collapsed lines' worth of both hold nothing.
+		d.eds[1].find.regex = true
+		d.Find(`^line`)
+		tt.Frame()
+		ed = &d.eds[1]
+		if len(ed.find.matches) != 3 || ed.find.matches[0].start != ed.view.text.LineStart(1) {
+			t.Fatalf("%v: ^line matched %v, want the three shown line starts", layout, ed.find.matches)
+		}
+		d.Find(`3$`)
+		tt.Frame()
+		if ed := &d.eds[1]; len(ed.find.matches) != 1 {
+			t.Fatalf("%v: 3$ matched %v, want the shown line's own end", layout, ed.find.matches)
+		}
+		d.Find(`a*`)
+		tt.Frame()
+		// a* holds the one a of "changed" and skips its empties.
+		ed = &d.eds[1]
+		if len(ed.find.matches) != 1 || ed.find.matches[0].start != ed.view.text.LineStart(0)+2 {
+			t.Fatalf("%v: a* matched %v, want the shown change's a", layout, ed.find.matches)
+		}
+		d.Find(`\bline\b`)
+		tt.Frame()
+		// \b holds at the line ends: three whole words of line.
+		if len(ed.find.matches) != 3 {
+			t.Fatalf("%v: \\bline\\b matched %v, want the three shown lines", layout, ed.find.matches)
+		}
+	}
+	// The old side finds by its own hidden lines: the same query over the
+	// same gap of its text (split).
+	d := &DiffState{Old: NewBuffer(strings.Join(a, "\n")), New: NewBuffer(strings.Join(b, "\n"))}
+	tt := ui.NewTester(func(c *ui.Context) { DiffView(c, d).Fill() }, 800, 600)
+	tt.Frame()
+	tt.Frame()
+	d.oldActive = true
+	d.Find("line 500")
+	tt.Frame()
+	if ed := d.editorOf(DiffOld); len(ed.find.matches) != 0 {
+		t.Fatalf("the old side matched the collapsed lines: %v", ed.find.matches)
+	}
+	d.ExpandAll()
+	tt.Frame()
+	tt.Frame()
+	if ed := d.editorOf(DiffOld); len(ed.find.matches) == 0 {
+		t.Fatal("the old side found nothing in the lines the expand shows")
+	}
+}
+
+// Typing in a shown line of an editable diff, with gaps before and after
+// it, searches the touched lines by their own: no panic, and the matches
+// are those of a search of the whole text.
+func TestDiffSearchLinesOfAnEdit(t *testing.T) {
+	var a []string
+	for i := range 600 {
+		a = append(a, "line "+strconv.Itoa(i))
+	}
+	b := append([]string(nil), a...)
+	b[300] = "changed"
+	d := &DiffState{Old: NewBuffer(strings.Join(a, "\n")), New: NewBuffer(strings.Join(b, "\n")), Editable: true}
+	tt := ui.NewTester(func(c *ui.Context) { DiffView(c, d).Fill() }, 800, 600)
+	tt.Frame()
+	tt.Frame()
+	d.Find("line 30")
+	tt.Frame()
+	// Type in a shown line: 301, a line of context the gaps leave shown
+	// before and after.
+	off := d.eds[1].view.text.LineStart(301)
+	d.New.Edit(Edit{Start: off, End: off + 1, Text: "x"})
+	tt.Frame()
+	ed := &d.eds[1]
+	f := &ed.find
+	// Searching only the lines the edit touched (searchLines) holds the
+	// same matches as the whole text has: the edited line is dirty, of
+	// the version the view is at, and the gaps around it lie past the
+	// line's window — the path where the hidden spans search a slice of
+	// the text.
+	f.version = ed.view.version
+	f.hiddenVer = ed.o.decor.(*diffSide).hideV
+	f.dirty = []lineSpan{{301, 302}}
+	tt.Frame()
+	got := slices.Clone(f.matches)
+	// The matches are those of a search of the whole text. The edit also
+	// widens the hunk around it, and the context's own matches with it.
+	f.stale = true
+	tt.Frame()
+	if !slices.Equal(got, f.matches) {
+		t.Fatalf("the touched lines matched %v, a full search %v", got, f.matches)
+	}
+}
+
 // A filler's stripes are those in sight, however high it is, at -45°
 // every 8 DIPs from its bottom-left corner, which they keep to as it
 // scrolls.
@@ -562,6 +694,7 @@ func TestDiffViewerFillerHatched(t *testing.T) {
 	nw.WriteString("z\n")
 	d := &DiffState{Old: NewBuffer("a\nz\n"), New: NewBuffer(nw.String()), Layout: DiffSplit}
 	tt := ui.NewTester(func(c *ui.Context) { DiffView(c, d).Fill() }, 900, 500)
+	waitCompared(t, tt, d)
 	tt.SetScale(2)
 	tt.Frame()
 	ed := &d.eds[0]
@@ -1097,6 +1230,41 @@ func TestDiffSplitDrag(t *testing.T) {
 	}
 }
 
+// The line between the sides crosses the separators, which span both:
+// it is drawn over them, and dragged from over them as from over the
+// lines.
+func TestDiffSplitLineCrossesSeparators(t *testing.T) {
+	var old strings.Builder
+	for i := range 40 {
+		old.WriteString("line " + strconv.Itoa(i) + "\n")
+	}
+	nw := strings.Replace(strings.Replace(old.String(), "line 2\n", "line two\n", 1), "line 37\n", "line thirty-seven\n", 1)
+	d := &DiffState{Old: NewBuffer(old.String()), New: NewBuffer(nw), Layout: DiffSplit}
+	tt := ui.NewTester(func(c *ui.Context) { DiffView(c, d).Fill() }, 901, 600)
+	waitCompared(t, tt, d)
+	var sep ui.AccessInfo
+	for _, a := range tt.AccessAll() {
+		if a.Role == ui.RoleGroup && strings.HasSuffix(a.Name, "unmodified lines") {
+			sep = a
+		}
+	}
+	if sep.Bounds.H == 0 {
+		t.Fatalf("no separator in %q", tt.Texts())
+	}
+	img := tt.Image()
+	line := img.RGBAAt(450, int(d.eds[0].r.Y+d.eds[0].view.lineHeight/2))
+	y := sep.Bounds.Y + sep.Bounds.H/2
+	if got := img.RGBAAt(450, int(y)); got != line {
+		t.Fatalf("over the separator the line is drawn %v, over the lines %v", got, line)
+	}
+	tt.Press(450.5, y)
+	tt.Move(540.5, y)
+	tt.Release(540.5, y)
+	if d.SplitPercent != 60 {
+		t.Fatalf("dragged from over the separator to 540 of 900 DIPs, SplitPercent is %v", d.SplitPercent)
+	}
+}
+
 // Tab goes from the old side to the line between the sides and on to the
 // new side, and the arrows move the line.
 func TestDiffSplitKeys(t *testing.T) {
@@ -1210,12 +1378,40 @@ func TestDiffSplitHeaderKeepsToOldSide(t *testing.T) {
 	tt.Move(0, 200)
 	tt.Release(0, 200)
 	tt.Frame()
-	old, _, _ := sideWidths(d)
+	old, _, newX := sideWidths(d)
 	if old > 200 {
 		t.Fatalf("dragged to the left edge, the old side is %v wide", old)
 	}
-	if r := headerBox(tt); r.X+r.W > old {
-		t.Fatalf("the header's text spans %v to %v, past the old side's right edge at %v", r.X, r.X+r.W, old)
+	sep, ok := tt.AccessByRole(ui.RoleGroup, header)
+	if !ok {
+		t.Fatalf("no separator %q in %q", header, tt.Texts())
+	}
+	img := tt.Image()
+	s := float32(img.Bounds().Dx()) / 901
+	barMidY := int((sep.Bounds.Y + sep.Bounds.H/2) * s)
+	barBg := img.RGBAAt(int((sep.Bounds.X+sep.Bounds.W-20)*s), barMidY)
+	edBg := img.RGBAAt(int((newX+20)*s), int((sep.Bounds.Y+sep.Bounds.H+10)*s))
+	if barBg == edBg {
+		t.Fatalf("the header bar does not span the new side: bar=%v, editor=%v", barBg, edBg)
+	}
+	y0, y1 := int((sep.Bounds.Y+6)*s), int((sep.Bounds.Y+sep.Bounds.H-6)*s)
+	oldInk := false
+	for py := y0; py < y1; py++ {
+		for px := int(6 * s); px < int(old*s); px++ {
+			if img.RGBAAt(px, py) != barBg {
+				oldInk = true
+				break
+			}
+		}
+		for px := int((newX + 1) * s); px < int((sep.Bounds.X+sep.Bounds.W-12)*s); px++ {
+			if got := img.RGBAAt(px, py); got != barBg {
+				t.Fatalf("the header's text drew at (%v, %v) past the old side's right edge %v: %v != %v",
+					float32(px)/s, float32(py)/s, old, got, barBg)
+			}
+		}
+	}
+	if !oldInk {
+		t.Fatal("the header's text drew nothing on the old side")
 	}
 
 	// Unified, nothing cuts it: it is as wide as in a view twice as wide.
@@ -1424,5 +1620,197 @@ func TestDiffViewForgetsDeletedLines(t *testing.T) {
 	}
 	if n := len(ov.shaped.cur) + len(ov.shaped.prev); n > 600 {
 		t.Errorf("%d shaped rows of 2,000 deleted lines still kept", n)
+	}
+}
+
+// largeDiffTexts returns texts of n lines each, past what is compared on
+// the main thread, every 50th line changed.
+func largeDiffTexts(n int) (string, string) {
+	var a, b strings.Builder
+	for i := range n {
+		line := "\tvalue := compute(" + strconv.Itoa(i) + ")\n"
+		a.WriteString(line)
+		if i%50 == 7 {
+			line = "\tvalue := computeAgain(" + strconv.Itoa(i) + ")\n"
+		}
+		b.WriteString(line)
+	}
+	return a.String(), b.String()
+}
+
+// holdDiffs keeps the comparisons started off the main thread, for the
+// test to run when it chooses.
+func holdDiffs(t *testing.T) *[]func() {
+	var jobs []func()
+	prev := startDiff
+	startDiff = func(job func()) { jobs = append(jobs, job) }
+	t.Cleanup(func() { startDiff = prev })
+	return &jobs
+}
+
+// waitCompared waits for a comparison of d off the main thread to be
+// done and the window to draw it.
+func waitCompared(t *testing.T, tt *ui.Tester, d *DiffState) {
+	t.Helper()
+	for d.Comparing() {
+		wait.Until(t, "the window to draw again after the comparison", tt.FramePending)
+		tt.Frame()
+	}
+}
+
+// syncHunks returns the hunks of old and nw compared on the spot, as
+// with no window.
+func syncHunks(old, nw string, editable bool) []DiffHunk {
+	return (&DiffState{Old: NewBuffer(old), New: NewBuffer(nw), Editable: editable}).Hunks()
+}
+
+// A large diff is compared off the main thread: its first frame shows the
+// texts without changes, and the window draws again with them once the
+// comparison is done (#1812).
+func TestDiffLargeComparesOffMainThread(t *testing.T) {
+	jobs := holdDiffs(t)
+	old, nw := largeDiffTexts(diffSyncLines)
+	d := &DiffState{Old: NewBuffer(old), New: NewBuffer(nw)}
+	tt := ui.NewTester(func(c *ui.Context) { DiffView(c, d).Fill() }, 800, 600)
+	if len(*jobs) != 1 {
+		t.Fatalf("%d comparisons started off the main thread, want 1", len(*jobs))
+	}
+	if !d.Comparing() || len(d.Hunks()) != 0 {
+		t.Fatalf("comparing %v with %d hunks before the comparison ran, want true with none", d.Comparing(), len(d.Hunks()))
+	}
+	// Hidden: only the empty line after each final newline.
+	for i, s := range d.sides {
+		if h := s.hidden(); len(h) != 1 || h[0].from != diffSyncLines {
+			t.Fatalf("side %d hides %v while compared, want the texts whole", i, h)
+		}
+	}
+	go (*jobs)[0]()
+	wait.Until(t, "the window to draw again after the comparison", tt.FramePending)
+	tt.Frame()
+	if d.Comparing() {
+		t.Fatal("still comparing after the comparison was done")
+	}
+	if got, want := d.Hunks(), syncHunks(old, nw, false); !slices.Equal(got, want) || len(got) != diffSyncLines/50 {
+		t.Fatalf("hunks %v, want %v", got, want)
+	}
+	if len(d.sides[1].hidden()) < 2 {
+		t.Fatalf("hidden %v after the comparison, want unchanged lines collapsed", d.sides[1].hidden())
+	}
+	// Small texts are compared at once.
+	d.Old, d.New = NewBuffer("a\nb\n"), NewBuffer("a\nc\n")
+	tt.Frame()
+	if len(*jobs) != 1 || d.Comparing() || len(d.Hunks()) != 1 {
+		t.Fatalf("small texts: %d comparisons started, comparing %v, hunks %v", len(*jobs), d.Comparing(), d.Hunks())
+	}
+}
+
+// Large texts no window shows are compared at once, as for an app's
+// Hunks with no view.
+func TestDiffLargeWithoutWindow(t *testing.T) {
+	jobs := holdDiffs(t)
+	old, nw := largeDiffTexts(diffSyncLines)
+	d := &DiffState{Old: NewBuffer(old), New: NewBuffer(nw)}
+	if n := len(d.Hunks()); n != diffSyncLines/50 || d.Comparing() || len(*jobs) != 0 {
+		t.Fatalf("%d hunks, comparing %v, %d comparisons started", n, d.Comparing(), len(*jobs))
+	}
+}
+
+// Edits while a large diff is compared: of the new text, the result is
+// taken and the edits compared again around them; of the old text, the
+// result is dropped for a comparison of the old text as it is; of other
+// buffers, it is dropped.
+func TestDiffLargeEditedWhileComparing(t *testing.T) {
+	jobs := holdDiffs(t)
+	old, nw := largeDiffTexts(diffSyncLines)
+	d := &DiffState{Old: NewBuffer(old), New: NewBuffer(nw), Editable: true}
+	tt := ui.NewTester(func(c *ui.Context) { DiffView(c, d).Fill() }, 800, 600)
+	d.New.Edit(Edit{Start: 0, End: 0, Text: "added\n"})
+	tt.Frame()
+	d.New.Edit(Edit{Start: d.New.Len(), End: d.New.Len(), Text: "last\n"})
+	tt.Frame()
+	if len(*jobs) != 1 || !d.Comparing() {
+		t.Fatalf("%d comparisons started, comparing %v, want 1, true", len(*jobs), d.Comparing())
+	}
+	(*jobs)[0]()
+	tt.Frame()
+	if got, want := d.Hunks(), syncHunks(old, d.New.String(), true); d.Comparing() || !slices.Equal(got, want) {
+		t.Fatalf("after editing the new text: comparing %v, hunks %v, want %v", d.Comparing(), got, want)
+	}
+
+	// The old text edited: the comparison started before is stale.
+	d.Old.Edit(Edit{Start: 0, End: 0, Text: "x\n"}) // compared anew
+	tt.Frame()
+	d.Old.Edit(Edit{Start: 0, End: 0, Text: "y\n"}) // and anew
+	tt.Frame()
+	if len(*jobs) != 3 {
+		t.Fatalf("%d comparisons started, want 3", len(*jobs))
+	}
+	(*jobs)[1]()
+	tt.Frame()
+	if !d.Comparing() || len(d.Hunks()) != 0 {
+		t.Fatalf("a stale comparison was taken: comparing %v, hunks %v", d.Comparing(), d.Hunks())
+	}
+	(*jobs)[2]()
+	tt.Frame()
+	if got, want := d.Hunks(), syncHunks(d.Old.String(), d.New.String(), true); d.Comparing() || !slices.Equal(got, want) {
+		t.Fatalf("after editing the old text: comparing %v, hunks %v, want %v", d.Comparing(), got, want)
+	}
+
+	// Other buffers: the comparison of the ones before is dropped.
+	d.Old.Edit(Edit{Start: 0, End: 0, Text: "z\n"})
+	tt.Frame()
+	d.Old, d.New = NewBuffer("a\n"), NewBuffer("b\n")
+	tt.Frame()
+	(*jobs)[3]()
+	tt.Frame()
+	if got := d.Hunks(); len(got) != 1 || got[0] != (DiffHunk{0, 1, 0, 1}) {
+		t.Fatalf("hunks %v of other buffers, want one", got)
+	}
+}
+
+// Typing in a large editable diff while it is compared on a goroutine, a
+// test for the race detector: the result is of the texts as they are.
+func TestDiffLargeTypingWhileComparing(t *testing.T) {
+	old, nw := largeDiffTexts(diffSyncLines)
+	d := &DiffState{Old: NewBuffer(old), New: NewBuffer(nw), Editable: true}
+	tt := ui.NewTester(func(c *ui.Context) { DiffView(c, d).Fill() }, 800, 600)
+	for i := 0; i < 20 && d.Comparing(); i++ {
+		d.New.Edit(Edit{Start: 0, End: 0, Text: strconv.Itoa(i) + "\n"})
+		tt.Frame()
+	}
+	waitCompared(t, tt, d)
+	if got, want := d.Hunks(), syncHunks(old, d.New.String(), true); !slices.Equal(got, want) {
+		t.Fatalf("hunks %v, want %v", got, want)
+	}
+}
+
+// With ScrollPastEnd, GoToHunk brings the last change to the middle of the
+// view, where without it the view stops at the last line; Focus then gives
+// the side its caret's editor the keyboard.
+func TestDiffScrollPastEndAndFocus(t *testing.T) {
+	var a []string
+	for i := range 200 {
+		a = append(a, "line "+strconv.Itoa(i))
+	}
+	b := append([]string(nil), a...)
+	b[198] = "changed"
+	for _, past := range []bool{false, true} {
+		for _, layout := range []DiffLayout{DiffSplit, DiffUnified} {
+			d := &DiffState{Old: NewBuffer(strings.Join(a, "\n")), New: NewBuffer(strings.Join(b, "\n")),
+				Layout: layout, ExpandUnchanged: true, ScrollPastEnd: past}
+			tt := ui.NewTester(func(c *ui.Context) { DiffView(c, d).Fill() }, 800, 600)
+			tt.Frame()
+			d.GoToHunk(0)
+			d.Focus()
+			tt.Frame()
+			tt.Frame()
+			end := d.LineTop(DiffNew, d.New.LineCount()) - d.ViewportHeight()
+			if y := d.ScrollY(); past != (y > end) {
+				t.Errorf("layout %v, ScrollPastEnd %v: ScrollY %v, the last line's bottom at %v", layout, past, y, end)
+			}
+			if !d.eds[1].focused {
+				t.Errorf("layout %v: Focus left the new side without the keyboard", layout)
+			}
+		}
 	}
 }

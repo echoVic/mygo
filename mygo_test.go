@@ -3,6 +3,7 @@
 package mygo
 
 import (
+	"cmp"
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -44,17 +45,21 @@ func TestMain(m *testing.M) {
 		helper := fake.New()
 		backendOnce.Do(func() { theBackend = helper })
 		packageIdentifier = os.Getenv("MYGO_TEST_IDENTIFIER")
-		App.SetName("MyGoTest")
-		if App.RequestSingleInstanceLock() {
-			fmt.Println("locked")
-			releaseSingleInstanceLock()
-		} else {
-			fmt.Println("forwarded")
-		}
-		if helper.ForegroundAllowed > 0 {
-			fmt.Println("passed the foreground on")
-		}
+		App.SetName(cmp.Or(os.Getenv("MYGO_TEST_INSTANCE_NAME"), "MyGoTest"))
+		singleInstanceTestHelper(helper)
 		os.Exit(0)
+	}
+	if os.Getenv("MYGO_TEST_INSTANCE_CHILD") == "1" {
+		// A process that an instance started, which outlives it.
+		fmt.Println("child started")
+		_, _ = io.Copy(io.Discard, os.Stdin)
+		os.Exit(0)
+	}
+	if dir := os.Getenv("MYGO_TEST_CRASH_LOG"); dir != "" {
+		// Helper process for TestCrashLog: a packaged app that panics.
+		App.SetPath(PathLogs, dir)
+		logCrashes()
+		panic("mygo test crash")
 	}
 	fb = fake.New()
 	backendOnce.Do(func() { theBackend = fb })
@@ -600,6 +605,34 @@ func TestReadyToShowFiresOnce(t *testing.T) {
 	}
 }
 
+// A window created hidden and shown from OnReadyToShow shows when its
+// first page fails to load, unless a listener of the failure loads
+// another page, which the window then waits for.
+func TestReadyToShowAfterFailedLoad(t *testing.T) {
+	w, fw := testWindow(t, WindowOptions{Hidden: true})
+	var n atomic.Int32
+	w.OnReadyToShow(func() { n.Add(1) })
+	fail := func() { onMain(func() { fw.H.LoadFailed("https://down.example/", -1004, "could not connect") }) }
+	fail()
+	if n.Load() != 1 {
+		t.Errorf("ready-to-show fired %d times after a failed load, want 1", n.Load())
+	}
+
+	w, fw = testWindow(t, WindowOptions{Hidden: true})
+	n.Store(0)
+	w.OnReadyToShow(func() { n.Add(1) })
+	off := w.Page().OnDidFailLoad(func(*LoadError) { w.Page().LoadHTML("<p>offline</p>", "") })
+	fail()
+	if n.Load() != 0 {
+		t.Errorf("ready-to-show fired %d times while the page of a listener loads, want 0", n.Load())
+	}
+	off()
+	fail()
+	if n.Load() != 1 {
+		t.Errorf("ready-to-show fired %d times after that page failed too, want 1", n.Load())
+	}
+}
+
 // Bound services.
 
 type testUser struct {
@@ -672,6 +705,28 @@ func TestCalls(t *testing.T) {
 	}
 	if svc.calls.Load() != 1 {
 		t.Errorf("Hello called %d times", svc.calls.Load())
+	}
+}
+
+// Text cut in the middle of an emoji holds half of a surrogate pair, which
+// JSON.stringify writes as an escape that is no character. The call is
+// made with U+FFFD in its place, and answered.
+func TestCallLoneSurrogate(t *testing.T) {
+	bindForTest(t, "Half", &testService{})
+	_, fw := testWindow(t, WindowOptions{})
+	for i, tt := range []struct{ method, arg, want string }{
+		{"Half.Hello", `"x\ud83d"`, "hello x\ufffd"},
+		{"Half.Hello", `"\ude00x"`, "hello \ufffdx"},
+		{"Half.Echo", `{"name":"a\ud83d","tags":[]}`, "map[name:a\ufffd tags:[echoed]]"},
+	} {
+		id := 300 + i
+		page(fw, fmt.Sprintf(`{"t":"call","id":%d,"k":"tok","m":%q,"a":[%s]}`, id, tt.method, tt.arg))
+		m := received(t, fw, func(m map[string]any) bool {
+			return m["t"] == "reply" && m["id"] == float64(id)
+		})
+		if m["ok"] != true || fmt.Sprint(m["v"]) != tt.want {
+			t.Errorf("%s(%s) = %v (%v), want %q", tt.method, tt.arg, m["v"], m["e"], tt.want)
+		}
 	}
 }
 
@@ -1252,6 +1307,37 @@ func TestEvalWindowCloses(t *testing.T) {
 	}
 }
 
+// TestEvalAnsweredByNextPage: an eval sent just before a navigation
+// commits may run in the page that comes next, as one sent right after
+// opening a window may run in the page it loads rather than the empty one
+// it starts with: the navigation leaves it be, and Eval returns the
+// answer of that page.
+func TestEvalAnsweredByNextPage(t *testing.T) {
+	w, fw := testWindow(t, WindowOptions{})
+	replies := make(chan func(string, error), 1)
+	fw.AsyncCallback = func(body string, reply func(string, error)) { replies <- reply }
+	type res struct {
+		v   any
+		err error
+	}
+	done := make(chan res, 1)
+	go func() {
+		v, err := w.Page().Eval("navigator.userAgent")
+		done <- res{v, err}
+	}()
+	reply := <-replies
+	onMain(func() { fw.H.NavigationCommitted("app://localhost/") })
+	onMain(func() { reply(`{"ok":true,"v":"Agent"}`, nil) })
+	select {
+	case r := <-done:
+		if r.v != "Agent" || r.err != nil {
+			t.Errorf("Eval = %v, %v", r.v, r.err)
+		}
+	case <-time.After(wait.Guard):
+		t.Fatal("Eval did not return the answer of the page that came next")
+	}
+}
+
 // TestEvalWebViewDestroyed is TestEvalWindowCloses for a web view's page.
 func TestEvalWebViewDestroyed(t *testing.T) {
 	show := true
@@ -1760,6 +1846,46 @@ func TestMenuRolesAndState(t *testing.T) {
 	last := updates[len(updates)-1]
 	if last.ID != menu.ItemByID("new").uid || last.Enabled {
 		t.Errorf("SetEnabled not propagated: %+v", last)
+	}
+}
+
+func TestMenuBadge(t *testing.T) {
+	menu := NewMenu([]*MenuItem{{
+		ID: "node", Label: "Node", Badge: "120 ms", BadgeAlign: BadgeAlignLeft,
+		BadgeShape: BadgeShapePill, BadgeColor: "#34c759", BadgeTextColor: "#fff",
+	}})
+	snap := menu.snapshot()
+	if got := snap.Items[0].Badge; got != "120 ms" {
+		t.Fatalf("badge = %q", got)
+	}
+	if got := snap.Items[0].BadgeAlign; got != platform.BadgeAlignLeft {
+		t.Fatalf("badge align = %q", got)
+	}
+	if pill := snap.Items[0]; pill.BadgeShape != platform.BadgeShapePill || pill.BadgeColor == nil ||
+		*pill.BadgeColor != (platform.Color{R: 0x34, G: 0xc7, B: 0x59, A: 255}) ||
+		pill.BadgeTextColor == nil || *pill.BadgeTextColor != (platform.Color{R: 255, G: 255, B: 255, A: 255}) {
+		t.Fatalf("badge pill = %+v", pill)
+	}
+	item := menu.ItemByID("node")
+	item.SetBadge("1.2s")
+	item.SetBadgeAlign(BadgeAlignCenter)
+	item.SetBadgeShape("")
+	item.SetBadgeColor("")
+	item.SetBadgeTextColor("#000")
+	onMain(func() {}) // the updates reach the backend on the main thread
+	updates := fb.MenuUpdates()
+	last := updates[len(updates)-1]
+	if last.ID != item.uid || last.Badge != "1.2s" || last.BadgeAlign != platform.BadgeAlignCenter ||
+		last.BadgeShape != "" || last.BadgeColor != nil ||
+		last.BadgeTextColor == nil || *last.BadgeTextColor != (platform.Color{R: 0, G: 0, B: 0, A: 255}) {
+		t.Errorf("badge updates not propagated: %+v", last)
+	}
+}
+
+func TestMenuKeepOpen(t *testing.T) {
+	menu := NewMenu([]*MenuItem{{ID: "node", Label: "Node", KeepOpen: true}})
+	if !menu.snapshot().Items[0].KeepOpen {
+		t.Error("KeepOpen lost in the snapshot")
 	}
 }
 

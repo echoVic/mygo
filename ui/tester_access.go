@@ -19,7 +19,9 @@ type AccessInfo struct {
 	// (aria-roledescription), as a "carousel" group; "" for the
 	// platform's name of Role.
 	RoleDescription string
-	// Bounds is the element's visible box, in the window's DIPs as Find's.
+	// Bounds is the element's visible box, clipped by the scroll containers
+	// and clips around it, in the window's DIPs as Find's; W or H is 0 when
+	// none of it shows (Offscreen).
 	Bounds Rect
 	// Checked is set on a check box, switch, radio button or menu item
 	// that is on, and on a toggle button pressed (aria-checked,
@@ -170,6 +172,7 @@ func (t *Tester) accessEach(fn func(r Role, n *platform.AccessNode, info func() 
 	// The roles elements were given, by their IDs: several may share a
 	// node's role, as a list box and a list do.
 	given := map[uint64]Role{}
+	boundsID := map[uint64]uint64{}
 	var walk func(e *node)
 	walk = func(e *node) {
 		if e.role > RoleNone {
@@ -179,6 +182,9 @@ func (t *Tester) accessEach(fn func(r Role, n *platform.AccessNode, info func() 
 			if r, ok := e.accessRole(); ok && !(e.role == RoleListItem && r == platform.RoleRow) {
 				given[e.id] = e.role
 			}
+		}
+		if b := accessBoundsNode(e); b != e {
+			boundsID[e.id] = b.id
 		}
 		for ch := e.first; ch != nil; ch = ch.next {
 			walk(ch)
@@ -193,11 +199,20 @@ func (t *Tester) accessEach(fn func(r Role, n *platform.AccessNode, info func() 
 		if !ok {
 			// One the role of what it does: a text, a button, a group…,
 			// which follow RoleGroup in the order of the node's roles
-			// (accessRole).
-			r = Role(n.Role) + RoleGroup
+			// (accessRole), or a node an element added (AccessChildren).
+			r = roleOfNode(n.Role)
 		}
 		info := func() AccessInfo {
 			a := accessInfoOf(r, n, tree.Focus)
+			sid := n.ID
+			if mapped, ok := boundsID[sid]; ok {
+				sid = mapped
+			}
+			if s := t.rt.states[sid]; s != nil {
+				a.Bounds = t.rt.windowRect(Rect{s.vx, s.vy, s.vw, s.vh})
+			} else {
+				a.Bounds = t.rt.clippedAccessBounds(tree, n, a.Bounds)
+			}
 			names := func(ids []uint64) []string {
 				var out []string
 				for _, id := range ids {
@@ -217,6 +232,51 @@ func (t *Tester) accessEach(fn func(r Role, n *platform.AccessNode, info func() 
 			return
 		}
 	}
+}
+
+// clippedAccessBounds clips a synthetic node's bounds (one without element
+// state of its own, such as AccessChildren or a web view's page node) to
+// the visible clip around it in the window's DIPs.
+func (rt *engine) clippedAccessBounds(tree *platform.AccessTree, n *platform.AccessNode, bounds Rect) Rect {
+	if n.WebView != nil {
+		if s := rt.states[n.ID^pageNodeID]; s != nil {
+			return intersect(bounds, rt.windowRect(rt.accessClip(s)))
+		}
+	}
+	for p := n.Parent; p >= 0 && p < len(tree.Nodes); p = tree.Nodes[p].Parent {
+		if s := rt.states[tree.Nodes[p].ID]; s != nil {
+			return intersect(bounds, rt.windowRect(rt.accessClip(s)))
+		}
+	}
+	w, h, _ := rt.size()
+	return intersect(bounds, rt.windowRect(Rect{0, 0, w, h}))
+}
+
+// accessClip returns the visible clip rectangle for s and its children in
+// content DIPs.
+func (rt *engine) accessClip(s *state) Rect {
+	if s.invisible {
+		return Rect{s.vx, s.vy, 0, 0}
+	}
+	w, h, _ := rt.size()
+	clip := Rect{0, 0, w, h}
+	if s.clips {
+		clip = intersect(clip, transformRect(s.world, s.clipRect))
+	}
+	if s.selfClips {
+		clip = intersect(clip, transformRect(s.world, s.selfClip))
+	}
+	return rt.clipAncestors(s, clip, [4]float32{})
+}
+
+// roleOfNode returns the Role of a node's role: those up to RoleTreeGrid
+// follow RoleGroup in the same order, and those after it RoleOption, as
+// the node's roles have no list box nor option of their own.
+func roleOfNode(r platform.AccessRole) Role {
+	if r >= platform.RoleDeletion {
+		return Role(r-platform.RoleDeletion) + RoleDeletion
+	}
+	return Role(r) + RoleGroup
 }
 
 // accessInfoOf returns what n tells of an element of role r, in the tree

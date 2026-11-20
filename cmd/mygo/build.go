@@ -52,7 +52,7 @@ downloads on Windows when it is not installed; -skip-installer leaves both
 out.
 
 Set macos.signingIdentity in mygo.json (or -sign) to a Developer ID to ship
-outside the Mac App Store, and macos.notarize to notarize the disk image.
+outside the Mac App Store, and macos.notarize to notarize the app and the disk image.
 
 With updates in mygo.json and the key of mygo keygen in
 MYGO_UPDATER_PRIVATE_KEY, each platform also gets a signed update archive,
@@ -157,6 +157,14 @@ WebAssembly, named by its content: a static site, to serve from anywhere.`)
 			}
 			continue
 		}
+		if mobile, ok := mobilePlatform(p); ok {
+			paths, err := mobile(c, opts)
+			built = append(built, paths...)
+			if err != nil {
+				return err
+			}
+			continue
+		}
 		goos, goarch, _ := strings.Cut(p, "/")
 		paths, err := buildPlatform(c, goos, goarch, opts)
 		built = append(built, paths...)
@@ -191,14 +199,17 @@ func buildPlatforms(raw string) ([]string, error) {
 		if isWebPlatform(p) {
 			continue
 		}
+		if _, ok := mobilePlatform(p); ok {
+			continue
+		}
 		goos, goarch, ok := strings.Cut(p, "/")
 		if !ok || goos == "" || goarch == "" || strings.Contains(goarch, "/") {
-			return nil, fmt.Errorf("invalid platform %q, want GOOS/GOARCH or web", p)
+			return nil, fmt.Errorf("invalid platform %q, want GOOS/GOARCH, web, ios or android", p)
 		}
 		switch goos {
 		case "darwin", "linux", "windows":
 		default:
-			return nil, fmt.Errorf("unsupported build platform %q: use darwin, linux, windows or web", p)
+			return nil, fmt.Errorf("unsupported build platform %q: use darwin, linux, windows, web, ios or android", p)
 		}
 	}
 	return targets, nil

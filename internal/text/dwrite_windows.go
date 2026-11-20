@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"unicode/utf16"
 	"unsafe"
@@ -952,6 +953,9 @@ func (e *dwrite) shapeText(text []rune, style Style, spans []Span, width float32
 	if width > 0 {
 		wrapAt = width + 1e-3
 	}
+	// The layout's inline objects, unpinned after it is released.
+	var objects layoutObjects
+	defer objects.unpin()
 	var layout uintptr
 	hr := method[func(this uintptr, text *uint16, n uint32, format uintptr, width, height float32, out *uintptr) uintptr](e.factory, factoryCreateTextLayout)(
 		e.factory, &u16[0], uint32(len(u16)), format, wrapAt, maxLayoutHeight, &layout)
@@ -971,7 +975,7 @@ func (e *dwrite) shapeText(text []rune, style Style, spans []Span, width float32
 		// Every stop at multiples of it, from the start of each line.
 		method[func(this uintptr, stop float32) uintptr](layout, formatSetIncrementalTab)(layout, style.tabStop)
 	}
-	e.typeset(layout, style, spans, text)
+	e.typeset(&objects, layout, style, spans, text)
 	if rtl {
 		// Trailing alignment keeps the lines at the left, as left-to-right
 		// lines are.
@@ -1036,7 +1040,7 @@ func (e *dwrite) shapeText(text []rune, style Style, spans []Span, width float32
 		}
 		lefts[li], lines[li].runs = ls, rs
 	}
-	if len(layoutObjects.objects) > 0 {
+	if len(objects.objects) > 0 {
 		units := make([]uint32, len(text)+1)
 		for i, r := range text {
 			units[i+1] = units[i] + 1
@@ -1221,8 +1225,9 @@ func distance(r dwRun, i uint32) uint32 {
 }
 
 // typeset applies a style's letter spacing and OpenType features to a text
-// layout of text, and the styles of its spans to their ranges.
-func (e *dwrite) typeset(layout uintptr, style Style, spans []Span, text []rune) {
+// layout of text, and the styles of its spans to their ranges, keeping its
+// inline objects in objects.
+func (e *dwrite) typeset(objects *layoutObjects, layout uintptr, style Style, spans []Span, text []rune) {
 	// The code unit of each rune, and a DWRITE_TEXT_RANGE of runes, passed
 	// in a register.
 	units := make([]uint32, len(text)+1)
@@ -1285,7 +1290,7 @@ func (e *dwrite) typeset(layout uintptr, style Style, spans []Span, text []rune)
 			}
 		}
 	}
-	setObjects(layout, spans, units)
+	setObjects(objects, layout, spans, units)
 }
 
 // spacing adds letter spacing to a range of a text layout, or, set, makes
@@ -1856,9 +1861,11 @@ func (e *dwrite) register(data []byte, family string) error {
 		}
 		e.loader = loader
 	}
-	// Without an owner, the loader copies the data.
+	// With an owner, the loader keeps a pointer to the data rather than
+	// a copy of it (fontData).
+	owner := keepFontData(data)
 	var file uintptr
-	if hr := call(e.loader, loaderCreateInMemoryFontFileReference, e.factory, uintptr(unsafe.Pointer(&data[0])), uintptr(len(data)), 0, uintptr(unsafe.Pointer(&file))); failed(hr) {
+	if hr := call(e.loader, loaderCreateInMemoryFontFileReference, e.factory, uintptr(unsafe.Pointer(&data[0])), uintptr(len(data)), owner, uintptr(unsafe.Pointer(&file))); failed(hr) {
 		return fmt.Errorf("mygo: cannot add font (HRESULT %#08x)", uint32(hr))
 	}
 	set, err := e.fileSet(file)
@@ -1929,6 +1936,66 @@ func (e *dwrite) register(data []byte, family string) error {
 		}
 	}
 	return nil
+}
+
+// fontData keeps the data of the fonts engines register for the process,
+// as the app's fonts last, for their in-memory loaders to read in place:
+// without an owner, a loader copies the data, and each engine has a
+// loader of its own, as each Tester's has, so a font took its size again
+// in every Tester (#1902). The data stays where it is, pinned, and owner
+// is the IUnknown each loader holds while it reads it: a COM object of Go
+// whose methods are created once (callbacks are never freed), which counts
+// its references but never lets go of the data.
+var fontData struct {
+	mu     sync.Mutex
+	pinner runtime.Pinner
+	pinned map[*byte]bool
+	vtbl   [3]uintptr
+	owner  fontOwner
+}
+
+type fontOwner struct {
+	vtbl *[3]uintptr
+	refs atomic.Int64
+}
+
+// keepFontData pins data for the process and returns the owner of it to
+// give DirectWrite.
+func keepFontData(data []byte) uintptr {
+	fontData.mu.Lock()
+	defer fontData.mu.Unlock()
+	if fontData.pinned == nil {
+		fontData.pinned = map[*byte]bool{}
+		fontData.vtbl = [3]uintptr{
+			syscall.NewCallback(fontOwnerQueryInterface),
+			syscall.NewCallback(fontOwnerAddRef),
+			syscall.NewCallback(fontOwnerRelease),
+		}
+		fontData.owner.vtbl = &fontData.vtbl
+	}
+	if p := &data[0]; !fontData.pinned[p] {
+		fontData.pinner.Pin(p)
+		fontData.pinned[p] = true
+	}
+	return uintptr(unsafe.Pointer(&fontData.owner))
+}
+
+func fontOwnerQueryInterface(this, iid, out uintptr) uintptr {
+	if *(*guid)(ptr(iid)) == iidIUnknown {
+		fontOwnerAddRef(this)
+		*(*uintptr)(ptr(out)) = this
+		return 0
+	}
+	*(*uintptr)(ptr(out)) = 0
+	return errNoInterface
+}
+
+func fontOwnerAddRef(this uintptr) uintptr {
+	return uintptr(uint32((*fontOwner)(ptr(this)).refs.Add(1)))
+}
+
+func fontOwnerRelease(this uintptr) uintptr {
+	return uintptr(uint32((*fontOwner)(ptr(this)).refs.Add(-1)))
 }
 
 // newCollection returns a font collection of the app's fonts.

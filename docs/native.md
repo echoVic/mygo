@@ -44,7 +44,9 @@ mygo.Dialog.Error("Import failed", err.Error())
 ```
 
 `OpenDialogOptions` also pick directories (`Directory`), show hidden files
-and, on macOS, a message and a New Folder button.
+and, on macOS, a message and a New Folder button. On Windows, choosing a
+library, such as Documents, in a directory picker picks the folder it saves
+to.
 
 A filter takes files by type too, as HTML's `accept`: `MIMETypes` such as
 `"application/pdf"`, or all of a kind, `"image/*"`, which the system's
@@ -477,6 +479,20 @@ defer release()
 itself, `NowPlaying.Sync` shows it. In browsers, `NowPlaying` is the
 page's Media Session.
 
+A track with more than one artist names them in `Artists`, which wins
+over `Artist` when it names any: MPRIS clients list them, and macOS,
+Windows and browsers, which show one artist, show them joined with ", ".
+
+```go
+mygo.NowPlaying.Set(mygo.NowPlayingInfo{
+	Title: "Get Lucky", Artists: []string{"Daft Punk", "Pharrell Williams", "Nile Rodgers"},
+})
+```
+
+On Linux, an MPRIS client can raise the player (`Raise`), as the media
+controls of GNOME and KDE do when it is clicked: the app's window that had
+the keyboard last shows, if hidden, and takes the keyboard.
+
 ## Network
 
 `mygo.Network` tells whether the computer is online and whether the
@@ -755,12 +771,15 @@ by the app or, where the system tells, by another app.
 
 On Linux under X11 the app grabs the keys itself. Under Wayland, where apps
 cannot, the desktop binds shortcuts for the app through the XDG desktop
-portal, which KDE Plasma 6 and GNOME 48 and later provide: the desktop may
+portal, which KDE Plasma 6 and GNOME 48 and later provide, and so it does
+for an app that runs on XWayland in a Wayland session (`GDK_BACKEND=x11`),
+whose grabs would get the keys only while it has the focus: the desktop may
 ask the user to confirm new shortcuts and lets them pick other keys, and it
 needs the app installed, since it identifies apps by their desktop entry.
 The shortcut works shortly after `Register` returns. Windows the function
 shows or focuses take the focus with the key press's activation token where
-the desktop provides one, as GNOME does.
+the desktop provides one, as GNOME does; under XWayland they show without
+it on GNOME, which keeps the focus for the window the user is in.
 
 Such a desktop shows the app's shortcuts to the user, where it asks to
 confirm them and in its settings, and the user may decline one, which then

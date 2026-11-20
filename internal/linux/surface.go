@@ -1,4 +1,4 @@
-//go:build linux && (amd64 || arm64)
+//go:build linux && !android && (amd64 || arm64)
 
 package linux
 
@@ -188,8 +188,10 @@ type surface struct {
 	pinch float64
 	// touch follows the fingers on the area; touched tells that GDK
 	// gave it touches, which the mouse GTK made of them must not repeat.
-	touch   touchGesture
+	touch   platform.TouchGesture
 	touched bool
+	// points numbers the fingers, for the views that follow each.
+	points touchPoints
 
 	textInput bool
 	caret     platform.RectF
@@ -841,19 +843,33 @@ func (s *surface) grabBroken(event ptr) {
 func (s *surface) touchEvent(typ int32, event ptr) {
 	s.touched = true
 	seq, x, y, t := field[ptr](event, 56), field[float64](event, 24), field[float64](event, 32), field[uint32](event, 20)
+	// Each finger, for the views that follow each, besides what the
+	// gesture makes of them. GDK tells no size of their contact: Width
+	// and Height stay 0.
+	finger := platform.SurfaceEvent{Kind: platform.TouchCancel}
+	if typ == 37 && field[int32](event, 64) != 0 {
+		for _, finger.ID = range s.points.reset() {
+			s.send(finger)
+		}
+	}
+	if kind, id, ok := s.points.event(typ, seq); ok {
+		finger.Kind, finger.ID, finger.X, finger.Y = kind, id, x, y
+		finger.Mods, finger.Pressure = gdkMods(field[uint32](event, 48)), eventPressure(event)
+		s.send(finger)
+	}
 	var evs []platform.SurfaceEvent
 	switch typ {
 	case 37:
 		if field[int32](event, 64) != 0 {
 			// The first finger of new touches: no other is down, whatever
 			// ended unseen, as under a grab.
-			s.touch.fingers = s.touch.fingers[:0]
+			s.touch.Reset()
 		}
-		evs = s.touch.begin(seq, x, y, t)
+		evs = s.touch.Begin(seq, x, y, t)
 	case 38:
-		evs = s.touch.move(seq, x, y)
+		evs = s.touch.Move(seq, x, y)
 	default:
-		evs = s.touch.end(seq, x, y, t, typ == 40)
+		evs = s.touch.End(seq, x, y, t, typ == 40)
 	}
 	mods := gdkMods(field[uint32](event, 48))
 	pressure := eventPressure(event)
@@ -866,7 +882,7 @@ func (s *surface) touchEvent(typ int32, event ptr) {
 			}
 			// Taps land further apart than clicks.
 			dc := doubleClick()
-			dc.DX, dc.DY = max(dc.DX, touchSlop), max(dc.DY, touchSlop)
+			dc.DX, dc.DY = max(dc.DX, platform.TouchSlop), max(dc.DY, platform.TouchSlop)
 			ev.Clicks = s.clicks.Press(ev.Button, ev.X, ev.Y, t, dc)
 			// A menu the tap opens shows for it.
 			if s.w.press.event != 0 {

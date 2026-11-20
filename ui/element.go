@@ -286,33 +286,56 @@ const (
 // into the comparison there; TestLayoutInputs keeps node's other fields
 // out of layout.
 type layoutStyle struct {
-	// First, as what changes most, so that comparing finds it soonest.
-	text string
-
+	// First, as what changes most, so that comparing finds it soonest, and
+	// as what a walk reads: the text of a text element, its kind and its
+	// own alignment, then how it lays its own children out — a container
+	// reads those of itself as it lays out, and every container is a child
+	// of another, so they stand with the text in the element's second line
+	// rather than down in its cold end.
+	text                 string
 	kind                 kind
-	row                  bool
-	wrap                 bool
+	self                 Align
+	row, wrap            bool
 	reverse, wrapReverse bool
-	// dir is the element's direction (dirRTL, dirSet), and logical which
-	// of its horizontal edges were set by their start or end
-	// (direction.go).
-	dir, logical           uint8
-	justify, align, self   Align
-	alignContent           Align
-	gapX, gapY             float32
+	// dir is the element's direction (dirRTL, dirSet) (direction.go).
+	dir            uint8
+	justify, align Align
+	alignContent   Align
+	grid           bool
+	gapX, gapY     float32
+
+	// What the layout reads of every child a container walks, in the lines it
+	// reads them in: a container of a hundred thousand children reads all of
+	// these of each of them, so they come next, packed into the second,
+	// third and fourth cache lines of the element, under the tree links, the
+	// flags and the box that the first holds.
+	margin                 [4]float32 // Auto for auto margins
 	pad                    [4]float32 // top, right, bottom, left
 	border                 [4]float32 // top, right, bottom, left
-	margin                 [4]float32 // Auto for auto margins
 	width, height          length
 	minW, minH, maxW, maxH bound
 	grow, shrink           float32
 	basis                  length
-	inset                  [4]length
 	aspect                 float32
-	grid                   bool
-	justifyItems           Align // of a grid
-	cell                   gridCell
-	justifySelf            Align
+
+	// What no walk of a container's children reads comes last, in an order
+	// that leaves no padding in it: what is eight bytes wide first, where it
+	// needs none to stand, then what is one.
+	maxLines int
+	// cell is the element's place in its container's grid (gridCell), which
+	// only that container's own layout reads.
+	cell gridCell
+	// ellipsis is what ends a line of text that did not fit (Ellipsis).
+	ellipsis string
+	// inset is how far out of the flow the element sits (Absolute, Attach),
+	// from each edge of its container.
+	inset [4]length
+	// logical says which of its horizontal edges were set by their start or
+	// end (direction.go): the view sets it, the layout reads none of it.
+	logical uint8
+
+	justifyItems Align // of a grid
+	justifySelf  Align
 	// sticky holds the element in its scroll container by its insets
 	// (Sticky), which then do not move it as relative positioning does.
 	sticky bool
@@ -326,14 +349,13 @@ type layoutStyle struct {
 	// the walk.
 	absoluteChild bool
 
-	maxLines   int
 	single     bool
 	noWrap     bool
 	balance    bool
 	pretty     bool
 	keepSpaces bool
-	ellipsis   string
 	middle     bool
+	cutStart   bool
 }
 
 // Element is a node of a frame's user interface. The functions that create
@@ -362,24 +384,46 @@ type node struct {
 	// lay says what the layout cache may do with the element
 	// (layOwner, layReuse), and laid when layoutBox last laid it out, in
 	// engine.laySeq.
-	lay  uint8
-	laid uint64
+	lay uint8
+	// hidden takes it and the elements inside it out of the frame, as
+	// CSS's display: none does (Hidden): the layout gives it no room, and
+	// it paints, takes input and reads to assistive technology as an
+	// invisible element does, while what is inside it keeps its state.
+	// The layout reads it of every child it walks, next to the flags it
+	// reads there too, so that the walk reads one cache line.
+	hidden bool
+	// insetSet says the element has insets, which move it out of the flow
+	// of its container: the layout reads this of every child it places,
+	// in the line it writes the box in, and not in the line the insets
+	// are in.
+	insetSet bool
+	laid     uint64
+
+	parent *node
+	first  *node
+	next   *node
+
+	// The layout's results, in DIPs relative to the window. They are here,
+	// between the tree links and the style, so that a walk of a container's
+	// children reads the box it gives each of them in the lines it reads
+	// what it lays them out by, and not in a line of its own.
+	x, y, w, h float32
+
+	st   *state
+	last *node
 	// hold is the element's entry in the engine's holds (0 for none):
 	// what a measuring pass resolved for its in-flow children, which a
 	// commit pass at the same size uses instead of building them again.
 	hold int32
 
-	parent *node
-	first  *node
-	last   *node
-	next   *node
-	st     *state
-
-	// layoutStyle holds what lays the element out.
+	// layoutStyle holds what lays the element out. What the layout reads of
+	// every child a container walks comes first in it — the text, the kind
+	// and the alignment, then how a container lays its own children out and
+	// the sizes it lays the child out by — so that a walk of a container's
+	// children reads them next to the tree links, the flags and the box
+	// above, in the lines after them.
 	layoutStyle
 
-	// Layout results, in DIPs relative to the window.
-	x, y, w, h float32
 	// measured is what was measured of the element: its max-content and
 	// min-content widths, and its heights at widths.
 	measured
@@ -426,11 +470,6 @@ type node struct {
 	// backface hides it while its 3D transform turns its back to the
 	// viewer (BackfaceHidden).
 	backface bool
-	// hidden takes it and the elements inside it out of the frame, as
-	// CSS's display: none does (Hidden): the layout gives it no room, and
-	// it paints, takes input and reads to assistive technology as an
-	// invisible element does, while what is inside it keeps its state.
-	hidden bool
 	// ignoreInput lets the pointer and the keyboard pass it and the
 	// elements inside it by, which still show and read to assistive
 	// technology (IgnoreInput).
@@ -446,6 +485,9 @@ type node struct {
 	// inside it are unavailable, while they keep the focus, the pointer
 	// and their look (AccessDisabled).
 	accessDisabled bool
+	// stateRead tells that the build read or bound the element's state or
+	// identity before Key ran.
+	stateRead bool
 
 	// Painting.
 	bg          Color
@@ -473,8 +515,11 @@ type node struct {
 	opacity    float32
 	opacitySet bool
 	undimmed   bool // kept at its opacity while disabled (DimDisabled)
-	cursor     Cursor
-	paintFn    func(p *Painter, r Rect)
+	// unavailable marks a drawn menu's item that cannot be chosen, dimmed as
+	// if Disabled but still under the pointer (menuParts.item).
+	unavailable bool
+	cursor      Cursor
+	paintFn     func(p *Painter, r Rect)
 	// hitFn tells where in its box the element takes the pointer
 	// (HitTest).
 	hitFn func(x, y float32, r Rect) bool
@@ -574,6 +619,9 @@ type node struct {
 	// accFill describes the element to assistive technology further, as
 	// a code editor its text and selection.
 	accFill func(n *platform.AccessNode)
+	// accChildren adds nodes of its own inside the element's, as a diff
+	// viewer the lines it shows (AccessChildren).
+	accChildren func(parent *platform.AccessNode, add func(platform.AccessNode))
 	// accStep is how far the keys move the value of a range.
 	accStep float64
 	// keyShortcuts are the keys that press or focus the element, as the
@@ -720,9 +768,22 @@ type node struct {
 	// (zindex.go).
 	zIndex int32
 	zOrder bool
+	// pinned tells that the element's own transform is only the remainder
+	// a transition moving it carries to its resting pixels (snapTo), and
+	// pinWorld that its world is then only such remainders: a translation
+	// its text paints under as at rest (Painter.element). Beside zOrder,
+	// they keep to the bytes before serial.
+	pinned, pinWorld bool
 	// serial is the order the pass made the element in: of overlays, the
 	// one made last shows on top.
 	serial int32
+	// The engine allocates elements from chunks of 32 (context.go), strided
+	// by the element's size, so that size is a whole number of cache lines:
+	// each element of a chunk then begins on one, and a walk of a
+	// container's children reads a child's box and style in the same lines
+	// whichever child it is on, rather than in one more line of most of
+	// them.
+	_ [2]uint32
 }
 
 // measure is the height of an element at a width (naturalHeight).
@@ -926,12 +987,14 @@ func (e *node) Children(fn func()) *node {
 // Key identifies the element among its siblings by k instead of by its
 // position, so that its state (focus, scrolling, text being edited, …)
 // follows it when the siblings before it change. Call it right after
-// creating the element. Widgets that handle their input as they are
-// created (Checkbox, Radio, Switch, Slider, Select, Link, List, TextInput
-// and TextArea) cannot take a key, and Key panics: give it to an element
-// around them instead, as Row(c).Key(k).Children(...) does. Siblings need
-// keys of their own: two elements with one key share one state, which
-// MyGo logs, and a Tester panics for.
+// creating the element, before reading its state, or pass it with
+// Context.Key before construction. Widgets that handle their input as they
+// are created (Checkbox, Radio, Switch, Slider, Select, Link, List,
+// TextInput and TextArea) cannot take a key, and Key panics: use
+// Context.Key before construction instead. Calling Key after the
+// element's state was read logs a warning in apps and panics in Tester.
+// Siblings need keys of their own: two elements with one key share one
+// state, which MyGo logs, and a Tester panics for.
 func (e *node) Key(k any) *node {
 	if e.widget != "" {
 		panic("ui: Key on a " + e.widget + ", whose state was initialized: use Context.Key before construction")
@@ -1201,18 +1264,38 @@ func (e *node) markAbsolute() {
 // Top, Right, Bottom and Left place an Absolute element. On an element in
 // its parent's layout, they move it from where the layout put it, as CSS's
 // relative positioning does, without moving its siblings.
-func (e *node) Top(v float32) *node    { e.inset[0] = px(v); return e }
-func (e *node) Right(v float32) *node  { e.inset[1] = px(v); e.unlog(1, logInset); return e }
-func (e *node) Bottom(v float32) *node { e.inset[2] = px(v); return e }
-func (e *node) Left(v float32) *node   { e.inset[3] = px(v); e.unlog(3, logInset); return e }
+func (e *node) Top(v float32) *node { e.inset[0] = px(v); e.insetSet = true; return e }
+func (e *node) Right(v float32) *node {
+	e.inset[1] = px(v)
+	e.insetSet = true
+	e.unlog(1, logInset)
+	return e
+}
+func (e *node) Bottom(v float32) *node { e.inset[2] = px(v); e.insetSet = true; return e }
+func (e *node) Left(v float32) *node {
+	e.inset[3] = px(v)
+	e.insetSet = true
+	e.unlog(3, logInset)
+	return e
+}
 
 // TopPercent, RightPercent, BottomPercent and LeftPercent place the
 // element as Top, Right, Bottom and Left do, by a percentage of the
 // parent's height or width.
-func (e *node) TopPercent(p float32) *node    { e.inset[0] = percent(p); return e }
-func (e *node) RightPercent(p float32) *node  { e.inset[1] = percent(p); e.unlog(1, logInset); return e }
-func (e *node) BottomPercent(p float32) *node { e.inset[2] = percent(p); return e }
-func (e *node) LeftPercent(p float32) *node   { e.inset[3] = percent(p); e.unlog(3, logInset); return e }
+func (e *node) TopPercent(p float32) *node { e.inset[0] = percent(p); e.insetSet = true; return e }
+func (e *node) RightPercent(p float32) *node {
+	e.inset[1] = percent(p)
+	e.insetSet = true
+	e.unlog(1, logInset)
+	return e
+}
+func (e *node) BottomPercent(p float32) *node { e.inset[2] = percent(p); e.insetSet = true; return e }
+func (e *node) LeftPercent(p float32) *node {
+	e.inset[3] = percent(p)
+	e.insetSet = true
+	e.unlog(3, logInset)
+	return e
+}
 
 // Anchor is a point of a box: a corner, the middle of a side, or the
 // center.
@@ -1406,6 +1489,19 @@ func (e *node) KeepFocus() *node { e.flags |= flagKeepFocus; return e }
 // elements inside a text field described so show to assistive technology
 // too, as those of other text fields do not.
 func (e *node) Access(fn func(n *platform.AccessNode)) *node { e.accFill = fn; return e }
+
+// AccessChildren has fn add nodes of its own inside the element's, after
+// Access's fn described it and before the elements inside it, only while
+// assistive technology reads the window: what stands for parts of the
+// element that are no elements, as the lines a diff viewer shows, each
+// read as added or deleted. fn reads the element's node, parent, and adds
+// each node with add, whose Parent it sets; their IDs must be no
+// element's, and the same for the same part from frame to frame. Actions
+// on them do nothing. As Access, it takes the module's internal type.
+func (e *node) AccessChildren(fn func(parent *platform.AccessNode, add func(platform.AccessNode))) *node {
+	e.accChildren = fn
+	return e
+}
 
 // AspectRatio makes the height the width divided by r.
 func (e *node) AspectRatio(r float32) *node { e.aspect = r; return e }
@@ -1986,10 +2082,23 @@ func (e *node) Ellipsis(s string) *node { e.ellipsis = s; return e }
 // cuts in the middle of its last line rather than at its end, so that it
 // keeps both its start and its end, about as wide each, in the room
 // layout gives it: a list of files shows "src/components/…/picker.go",
-// whose folder and file's name both show.
+// whose folder and file's name both show. TruncateStart, with it, cuts
+// the start instead.
 func (e *node) TruncateMiddle() *node {
 	e.c.rt.text.UseTruncateMiddle()
 	e.middle = true
+	return e
+}
+
+// TruncateStart puts the ellipsis of text that SingleLine or MaxLines
+// cuts at the start of its last line rather than at its end, so that it
+// keeps as much of its end as fits the room layout gives it: a list of
+// files shows "…/theme/picker.go", whose file's name and nearest folders
+// show where its start does not matter. With TruncateMiddle too, the
+// start is cut.
+func (e *node) TruncateStart() *node {
+	e.c.rt.text.UseTruncateStart()
+	e.cutStart = true
 	return e
 }
 
@@ -2039,6 +2148,15 @@ func (e *node) disabled() bool {
 // It cannot recognize an old pointer whose arena slot has been reused.
 func (e *node) hasState() bool {
 	return e != nil && e.c != nil && e.c.rt != nil && e.st != nil && !e.c.rt.closed
+}
+
+// markStateRead records that the build read or bound the element's state
+// or identity, so a later Key reports it. Reads during painting or
+// journaling leave stateRead unset.
+func (e *node) markStateRead() {
+	if e != nil && e.c != nil && e.c.rt != nil && !e.c.rt.journal.on && !e.c.rt.painting {
+		e.stateRead = true
+	}
 }
 
 // Focusable lets the element take the keyboard focus, by a click or Tab.

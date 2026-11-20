@@ -90,6 +90,7 @@ const (
 
 	usageShaderRead   = 1
 	usageRenderTarget = 4
+	storageShared     = 0
 	storageManaged    = 1
 
 	loadActionDontCare     = 0
@@ -472,6 +473,9 @@ type Renderer struct {
 	video  videoState
 	// canvases are the textures canvases are drawn into.
 	canvases map[uint64]*canvasTexture
+	// atlases are the atlases of the frame being drawn, which mask and
+	// color hold: a canvas's scene may draw from its own (scene.Scene.Own).
+	atlases [2]*scene.Atlas
 	// blurred are the textures of the images the frame draws blurred
 	// (gpu.Builder.BlurredImage), the first used of them, and blurTmp the
 	// textures their passes go through; stopsTex is the texture of the
@@ -492,12 +496,15 @@ type Renderer struct {
 	checked bool
 
 	// lastRender is when the last frame drew; trimTimer trims the
-	// drawables once none has for a while, armed until it fires, and
-	// trimmed is whether it did.
+	// drawables once none has for a while, armed until it fires (at
+	// trimAt), and trimmed is whether it did. occluded tells that nothing
+	// of the window shows (SetOccluded): the while is shorter then.
 	lastRender         time.Time
 	trimTimer          uintptr
 	trimHandle         uintptr
+	trimAt             time.Time
 	trimArmed, trimmed bool
+	occluded           bool
 
 	// diff finds what changed since the last frame drawn, and ages what
 	// changed since each drawable was (see gpu.Ages); redrew is how much
@@ -531,7 +538,7 @@ func New(layer uintptr) (r *Renderer, err error) {
 		}
 		ml := send(send(class("CAMetalLayer"), "alloc"), "init")
 		if err = need(ml, "CAMetalLayer", "setDevice:", "setPixelFormat:", "setFramebufferOnly:", "setPresentsWithTransaction:",
-			"setColorspace:", "setDrawableSize:", "setContentsScale:", "setFrame:", "setAutoresizingMask:", "nextDrawable"); err != nil {
+			"setColorspace:", "setDrawableSize:", "setContentsScale:", "setFrame:", "nextDrawable"); err != nil {
 			release(&ml)
 			return
 		}
@@ -559,12 +566,27 @@ func New(layer uintptr) (r *Renderer, err error) {
 		}
 		// The first frame shows with the window's other changes; render
 		// decides for each frame.
-		send(ml, "setPresentsWithTransaction:", 1)
-		r.synced = true
+		if runtime.GOOS != "ios" {
+			send(ml, "setPresentsWithTransaction:", 1)
+			r.synced = true
+		}
 		send(ml, "setColorspace:", srgb)
 		send(ml, "setOpaque:", 0)
-		send(ml, "setAutoresizingMask:", layerWidthSizable|layerHeightSizable)
-		send(layer, "addSublayer:", ml)
+		if runtime.GOOS != "ios" {
+			// iOS's layers have no autoresizing: fit sizes it each frame.
+			send(ml, "setAutoresizingMask:", layerWidthSizable|layerHeightSizable)
+		}
+		if runtime.GOOS == "ios" {
+			// In a transaction of its own: the thread has no run loop to
+			// commit the one Core Animation would begin.
+			tx := class("CATransaction")
+			send(tx, "begin")
+			send(layer, "addSublayer:", ml)
+			send(tx, "commit")
+			flushTransactions()
+		} else {
+			send(layer, "addSublayer:", ml)
+		}
 		r.layer, r.superlayer = ml, layer
 	})
 	if err != nil {
@@ -885,7 +907,9 @@ func (r *Renderer) effectPipeline(e *scene.Effect) id {
 			lib = shared
 		}
 	}
-	if lib == 0 && len(e.Metal.Compiled) > 0 && e.Metal.Sum == gpu.SourceSum(src) {
+	// Effects compile ahead of time for macOS only: iOS compiles them as
+	// they first draw.
+	if lib == 0 && runtime.GOOS != "ios" && len(e.Metal.Compiled) > 0 && e.Metal.Sum == gpu.SourceSum(src) {
 		lib = r.libraryFromData(e.Metal.Compiled)
 	}
 	if lib == 0 {
@@ -955,6 +979,16 @@ func (r *Renderer) libraryFromData(code []byte) id {
 	return send(r.device, "newLibraryWithData:error:", data, uintptr(unsafe.Pointer(&errObj)))
 }
 
+// flushTransactions commits the transaction Core Animation began itself
+// for what changed on this thread, as a run loop would: on iOS frames draw
+// on Go's thread, which has none, and the layers it changed would never
+// reach the screen.
+func flushTransactions() {
+	if runtime.GOOS == "ios" {
+		send(class("CATransaction"), "flush")
+	}
+}
+
 func respondsTo(obj id, method string) bool {
 	return byte(send(obj, "respondsToSelector:", uintptr(sel(method)))) != 0
 }
@@ -968,7 +1002,13 @@ func (r *Renderer) newTexture(w, h int, format, usage uint, pix []byte, stride i
 	}
 	send(desc, "setUsage:", uintptr(usage))
 	if usage&usageRenderTarget != 0 {
-		send(desc, "setStorageMode:", storageManaged)
+		// iOS's GPUs share the memory with the CPU, and have no managed
+		// textures, which keep a copy on each side.
+		if runtime.GOOS == "ios" {
+			send(desc, "setStorageMode:", storageShared)
+		} else {
+			send(desc, "setStorageMode:", storageManaged)
+		}
 	}
 	tex := send(r.device, "newTextureWithDescriptor:", desc)
 	if tex != 0 && len(pix) > 0 {
@@ -1168,6 +1208,7 @@ func (r *Renderer) prepare(s *scene.Scene) (cb id, built *scene.Scene, err error
 	if err := r.syncAtlas(&r.color, s.ColorAtlas, pixelFormatRGBA8Unorm); err != nil {
 		return 0, nil, err
 	}
+	r.atlases = [2]*scene.Atlas{s.MaskAtlas, s.ColorAtlas}
 	r.pipes.fallbacks = 0
 	r.used = 0
 	cb = send(r.queue, "commandBuffer")
@@ -1215,8 +1256,16 @@ func (r *Renderer) drawCanvas(cb id, c *scene.Image) error {
 		t.w, t.h = c.W, c.H
 	}
 	// In BGRA8, in sRGB, whatever the frame's format.
-	saved := r.cur
-	defer func() { r.cur = saved }()
+	saved, frame := r.cur, [2]texture{r.mask, r.color}
+	defer func() {
+		r.cur = saved
+		for i, a := range [2]*texture{&r.mask, &r.color} {
+			if a.tex != frame[i].tex {
+				release(&a.tex)
+			}
+			*a = frame[i]
+		}
+	}()
 	r.cur = &r.formats[0]
 	if r.cur.pipeline == 0 {
 		if err := r.makePipelines(r.cur); err != nil {
@@ -1225,6 +1274,21 @@ func (r *Renderer) drawCanvas(cb id, c *scene.Image) error {
 	}
 	cs := c.Scene
 	cs.Width, cs.Height = c.W, c.H
+	// A canvas that keeps its glyphs (scene.Scene.Own) draws them from
+	// atlases of its own, in textures made for this drawing, which the
+	// command buffer keeps until the frame is drawn.
+	if a := cs.MaskAtlas; a != nil && a != r.atlases[0] {
+		r.mask = texture{}
+		if err := r.syncAtlas(&r.mask, a, pixelFormatR8Unorm); err != nil {
+			return err
+		}
+	}
+	if a := cs.ColorAtlas; a != nil && a != r.atlases[1] {
+		r.color = texture{}
+		if err := r.syncAtlas(&r.color, a, pixelFormatRGBA8Unorm); err != nil {
+			return err
+		}
+	}
 	t.b.Wide = false
 	t.b.Opaque, t.b.Classes = r.b.Opaque, r.b.Classes
 	t.b.NoCull, t.b.NoShadowSplit, t.b.NoRingSplit, t.b.NoCornerSplit = r.b.NoCull, r.b.NoShadowSplit, r.b.NoRingSplit, r.b.NoCornerSplit
@@ -1753,6 +1817,11 @@ func (r *Renderer) render(s *scene.Scene) error {
 	// transaction for each.
 	holes := hasHoles(s)
 	sync := changed || holes || r.holes
+	if runtime.GOOS == "ios" {
+		// The frames draw on Go's thread, apart from UIKit's, which has
+		// no run loop to commit a transaction they would present with.
+		sync = false
+	}
 	r.holes = holes
 	if sync {
 		// A drawable fetched before the layer changed, or to present
@@ -1932,6 +2001,7 @@ func (r *Renderer) fit(w, h int, scale float64) (changed bool) {
 	msgSetFloat(r.layer, sel("setContentsScale:"), scale)
 	msgSetSize(r.layer, sel("setDrawableSize:"), cgSize{float64(w), float64(h)})
 	send(tx, "commit")
+	flushTransactions()
 	r.w, r.h, r.scale, r.bounds, r.trimmed = w, h, scale, bounds, false
 	return true
 }
@@ -1974,10 +2044,41 @@ func (r *Renderer) releaseTextures() {
 // go: about when the Metal driver frees its own memory of frames.
 const trimAfter = 2 * time.Second
 
+// occludedTrimAfter is that time while nothing of the window shows
+// (SetOccluded), as a background tab, a minimized window or one on
+// another Space: it draws nothing then but after input or for a capture,
+// so its drawables, as large as the window, go as soon as the frame it
+// drew as it went out of sight is done, rather than costing every window
+// out of sight two or three frames of memory (#2040). Long enough that
+// keys typed into a key window that others cover do not make them again
+// for each.
+const occludedTrimAfter = 500 * time.Millisecond
+
+// SetOccluded tells the renderer whether nothing of its window shows on
+// screen, so that it gives back its spare drawables occludedTrimAfter
+// after its last frame rather than trimAfter. The layer keeps the frame
+// it shows, which the Dock shows of a minimized window, Mission Control
+// and a Space sliding in show of the others, and captures of the window
+// see, until a frame drawn once some of it shows replaces it, whole and
+// at the window's size.
+func (r *Renderer) SetOccluded(on bool) {
+	if on == r.occluded {
+		return
+	}
+	r.occluded = on
+	if on && !r.trimmed && !r.lastRender.IsZero() {
+		r.armTrim()
+	}
+}
+
 // armTrim has the renderer's timer trim the drawables once it draws
-// nothing for trimAfter.
+// nothing for trimAfter, or occludedTrimAfter while occluded, unless it is
+// armed to fire sooner.
 func (r *Renderer) armTrim() {
-	if r.trimArmed {
+	// The timer fires on the main run loop, which on iOS is UIKit's
+	// thread, not the one drawing: the system's memory warnings trim there
+	// instead (Renderer.Trim).
+	if runtime.GOOS == "ios" {
 		return
 	}
 	if r.trimTimer == 0 {
@@ -1993,25 +2094,67 @@ func (r *Renderer) armTrim() {
 		mainLoop, _, _ := purego.SyscallN(cfRunLoopGetMain)
 		purego.SyscallN(cfRunLoopAddTimer, mainLoop, r.trimTimer, commonModes)
 	}
-	cfRunLoopTimerSetNextFireDate(r.trimTimer, cfAbsoluteTimeGetCurrent()+trimAfter.Seconds())
-	r.trimArmed = true
+	after := trimAfter
+	if r.occluded {
+		after = occludedTrimAfter
+	}
+	if at := time.Now().Add(after); !r.trimArmed || at.Before(r.trimAt) {
+		r.setTrimTimer(at)
+	}
 }
 
-// trimIfIdle trims the drawables if the window drew nothing for trimAfter,
-// and waits for that time otherwise.
+// setTrimTimer has the trim timer fire at at.
+func (r *Renderer) setTrimTimer(at time.Time) {
+	r.trimAt, r.trimArmed = at, true
+	cfRunLoopTimerSetNextFireDate(r.trimTimer, cfAbsoluteTimeGetCurrent()+time.Until(at).Seconds())
+}
+
+// trimIfIdle trims the drawables if the window drew nothing for the time
+// trimWait gives, and waits for the rest of it otherwise.
 func (r *Renderer) trimIfIdle() {
-	if wait := trimAfter - time.Since(r.lastRender); wait > 0 {
-		cfRunLoopTimerSetNextFireDate(r.trimTimer, cfAbsoluteTimeGetCurrent()+wait.Seconds())
+	r.trimArmed = false
+	if wait := trimWait(time.Since(r.lastRender), r.occluded, r.pending.cb != 0 || r.pre.busy()); wait > 0 {
+		r.setTrimTimer(time.Now().Add(wait))
 		return
 	}
-	r.trimArmed = false
 	cfRunLoopTimerSetNextFireDate(r.trimTimer, cfAbsoluteTimeGetCurrent()+1e9)
 	r.trim()
 }
 
-// trim gives back the drawables the layer does not show. Shrinking them
-// frees those, and Core Animation keeps showing the last frame; the next
-// makes them again at full size.
+// trimWait returns how long a renderer whose last frame drew since ago
+// waits yet before trimming its drawables, 0 for none: until trimAfter
+// after that frame, or occludedTrimAfter while nothing of the window shows
+// (occluded). A frame waiting for its drawable, or a drawable being
+// fetched (busy), puts it off by occludedTrimAfter: trimming would drop
+// that frame, which the window would then never show, as nothing asks
+// for another, or wait on the main thread for the fetch, which waits up
+// to a second for a drawable the display holds.
+func trimWait(since time.Duration, occluded, busy bool) time.Duration {
+	after := trimAfter
+	if occluded {
+		after = occludedTrimAfter
+	}
+	switch {
+	case since < after:
+		return after - since
+	case busy:
+		return occludedTrimAfter
+	}
+	return 0
+}
+
+// trim gives back the drawables the layer does not show, and what the
+// GPU's frames use. Core Animation keeps showing the last frame; the next
+// frame makes the drawables again at full size, and draws whole.
+//
+// Shrinking the drawables frees those of the old size once the layer
+// hands out one of the new size, which it may not do before: the
+// presenter fetches one, a pixel big, off the main thread, which the next
+// frame lets go of unpresented (#2040). The layer's contents, the frame
+// shown, stay: without them, a window minimized would show nothing in the
+// Dock, nor one covered in Mission Control or a capture, and a window
+// showing again, as a Space slides in, would show nothing until its next
+// frame, which comes once the window server told that it shows.
 func (r *Renderer) trim() {
 	if r.layer == 0 || r.trimmed {
 		return
@@ -2029,6 +2172,7 @@ func (r *Renderer) trim() {
 		msgSetSize(r.layer, sel("setDrawableSize:"), cgSize{1, 1})
 		send(tx, "commit")
 	})
+	r.pre.start(r.layer)
 	r.trimmed = true
 }
 
@@ -2048,9 +2192,11 @@ func (r *Renderer) renderOffscreen(s *scene.Scene) (pix []byte, err error) {
 		if cb, err = r.encode(s, tex); err != nil {
 			return
 		}
-		blit := send(cb, "blitCommandEncoder")
-		send(blit, "synchronizeResource:", tex)
-		send(blit, "endEncoding")
+		if runtime.GOOS != "ios" {
+			blit := send(cb, "blitCommandEncoder")
+			send(blit, "synchronizeResource:", tex)
+			send(blit, "endEncoding")
+		}
 		send(cb, "commit")
 		send(cb, "waitUntilCompleted")
 		if int(send(cb, "status")) == statusError {
