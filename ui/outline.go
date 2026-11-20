@@ -1,8 +1,10 @@
 package ui
 
 import (
-	"runtime"
+	"slices"
 	"time"
+
+	"github.com/egoist/mygo/internal/platform"
 )
 
 // OutlineState is the state of an Outline or an OutlineTable: its rows, as
@@ -34,10 +36,24 @@ type OutlineState[K comparable] struct {
 	// Outline's rows then have neither padding nor a gap, and center
 	// what they hold; an OutlineTable's first cells keep their padding.
 	Prefix func(r OutlineRow)
-	rows   []outlineRow[K]
+	// Generation, when not zero, lets the outline keep its rows from one
+	// frame to the next, walking the open items again only when Open, the
+	// roots or Generation change: change it, as with Generation++,
+	// whenever children would return other items, or nil where it did not,
+	// or the other way round. Open is seen changing through its own
+	// methods, not through a copy of it sharing its items. When zero, the
+	// outline walks all the open items in every frame, which costs as
+	// much as they are many, and shows what children returns at once.
+	Generation uint64
+	rows       []outlineRow[K]
 	// children is the function giving the items' children in the last
 	// build, for the rows' arrows.
 	children func(K) []K
+	// The Generation, the stamp of Open and the roots the rows were made
+	// from, while Generation is not zero.
+	madeGen  uint64
+	madeOpen uint64
+	madeFrom []K
 }
 
 // OutlineRow is a row of an outline as its Prefix builds it, while it
@@ -98,13 +114,22 @@ func (s *OutlineState[K]) Item(row int) K { return s.rows[row].item }
 func (s *OutlineState[K]) Depth(row int) int { return s.rows[row].depth }
 
 // flatten lists the rows the outline shows: roots, and the children of
-// the items open.
+// the items open, or keeps those of the last build while Generation is
+// not zero and neither it, Open nor roots changed.
 func (s *OutlineState[K]) flatten(roots []K, children func(K) []K) {
 	if !(s.Indent >= 0) {
 		panic("ui: an OutlineState's Indent must not be negative")
 	}
-	s.rows = s.rows[:0]
 	s.children = children
+	if s.Generation != 0 && s.madeGen == s.Generation && s.madeOpen == s.Open.stamp && slices.Equal(s.madeFrom, roots) {
+		return
+	}
+	s.madeGen, s.madeOpen = s.Generation, s.Open.stamp
+	s.madeFrom = s.madeFrom[:0]
+	if s.Generation != 0 {
+		s.madeFrom = append(s.madeFrom, roots...)
+	}
+	s.rows = s.rows[:0]
 	var walk func(items []K, depth, parent int)
 	walk = func(items []K, depth, parent int) {
 		for _, item := range items {
@@ -141,12 +166,13 @@ func (s *OutlineState[K]) setOpen(item K, open, all bool, children func(K) []K) 
 // children's children with Option (Alt). row builds the content of an
 // item's row, after its arrow; Gap, Padding and the rest are a List's.
 //
-// The outline builds only the rows in view, as a List does, so trees of
-// any size are as fast as small ones. With s.List.Selected or Selection,
-// rows are chosen as a List's, and while the outline has the focus, Right
-// opens the item chosen or goes to its first child, and Left closes it or
-// goes to its parent, with Option on macOS and Shift elsewhere, as in GTK,
-// opening and closing all inside.
+// The outline builds only the rows in view, as a List does. It walks the
+// open items in every frame, unless s.Generation tells it when children
+// changes, which keeps trees of any size as fast as small ones. With
+// s.List.Selected or Selection, rows are chosen as a List's, and while
+// the outline has the focus, Right opens the item chosen or goes to its
+// first child, and Left closes it or goes to its parent, with Option on
+// macOS and Shift elsewhere, as in GTK, opening and closing all inside.
 //
 //	app.files.List.Selected = &app.file
 //	ui.Outline(c, &app.files, []string{"/"}, func(dir string) []string {
@@ -334,7 +360,7 @@ func (s *OutlineState[K]) keys(owner *node, children func(K) []K) {
 // macOS, Shift elsewhere, as in GTK, where Alt and the arrows go back and
 // forward.
 var allMod = func() Modifiers {
-	if runtime.GOOS == "darwin" {
+	if platform.MacKeys {
 		return Alt
 	}
 	return Shift

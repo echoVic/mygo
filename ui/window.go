@@ -37,9 +37,11 @@ func coreView(view func(c *context)) *Content { return &Content{view: view} }
 // RegisterFont adds a TrueType or OpenType font, or collection, that text
 // can use with Font(family). An empty family keeps the font's own name.
 // The fonts registered under a family make it up, apart from other fonts
-// of their own family.
+// of their own family. A Tester's window draws them too. Registering the
+// same data under the same family again does nothing. RegisterFont keeps
+// data, which must not change afterwards.
 func RegisterFont(data []byte, family string) error {
-	return text.Shared().RegisterFont(data, family)
+	return text.RegisterAppFont(data, family)
 }
 
 // A FontFamily is a font family text can use, as FontFamilies lists it.
@@ -109,6 +111,10 @@ func (v *Content) AttachContent(conn *surface.Conn) {
 	h.uiFont()
 	h.textLanguage()
 	h.automate()
+	if devAttach != nil {
+		devAttach(h)
+	}
+	h.watchFonts()
 	// Load the fonts while the window shows up.
 	go text.Shared().Preload()
 	h.requestFrame()
@@ -120,6 +126,10 @@ type windowHost struct {
 	conn *surface.Conn
 	rt   *engine
 	gpu  gpuRenderer
+	// parked is the GPU renderer kept while the surface has no native
+	// objects to draw into, since SurfaceRenew (renewableRenderer): the
+	// next makeGPU attaches it to the new ones.
+	parked renewableRenderer
 	// gpuTried tells that the first frame tried the GPU, onGPU that its
 	// renderer drew on a GPU, degraded that one drawing in software took
 	// its place, and gpuSince when the renderer was made. After a failure,
@@ -159,9 +169,14 @@ type windowHost struct {
 	// afterT and repaintT are the timers of After and Painter.After.
 	afterT, repaintT *time.Timer
 	detached         bool
+	// stopFonts stops hearing of the faces that load in browsers
+	// (watchFonts).
+	stopFonts func()
 	// shown tells that a frame was presented, which makes the window
-	// ready to show.
-	shown bool
+	// ready to show; renewed that the surface's native objects were made
+	// anew since (SurfaceRenew), which the next frame presented tells it
+	// of (platform.FirstFrameSurface).
+	shown, renewed bool
 	// placed is where the surface shows the window's web views, views
 	// the web views.
 	placed []platform.WebViewPlacement
@@ -321,13 +336,36 @@ func (h *windowHost) event(ev platform.SurfaceEvent) bool {
 	}
 	if ev.Kind == platform.SurfaceRenew {
 		// The next frame makes the renderer again, for the surface's new
-		// native objects.
-		if h.gpu != nil {
+		// native objects, or attaches the one kept to them.
+		if r, ok := h.gpu.(renewableRenderer); ok {
+			r.Detach()
+			h.releaseParked()
+			h.parked = r
+		} else if h.gpu != nil {
 			h.gpu.Release()
-			h.gpu = nil
 		}
+		h.gpu = nil
 		h.gpuTried, h.retryAt = false, time.Time{}
+		h.renewed = true
 		h.requestFrame()
+		return false
+	}
+	if ev.Kind >= platform.SurfaceLowMemory && ev.Kind <= platform.SurfaceStackPopped {
+		if ev.Kind == platform.SurfaceLowMemory {
+			// What the next frame makes again: the renderer's textures, its
+			// atlases and pipelines among them, and a renderer kept while
+			// the surface has none to draw into.
+			if h.gpu != nil {
+				h.gpu.Release()
+				h.gpu = nil
+				h.gpuTried, h.retryAt = false, time.Time{}
+			}
+			h.releaseParked()
+			h.requestFrame()
+		}
+		if touchSystem != nil {
+			touchSystem(h.rt, ev)
+		}
 		return false
 	}
 	if ev.Kind == platform.WebViewTabOut || ev.Kind == platform.WebViewKey {
@@ -345,6 +383,9 @@ func (h *windowHost) event(ev platform.SurfaceEvent) bool {
 		if r, ok := h.gpu.(invalidator); ok {
 			r.Invalidate()
 		}
+	}
+	if ev.Kind == platform.SurfaceHidden || ev.Kind == platform.SurfaceShown {
+		h.tellOccluded()
 	}
 	if ev.Kind == platform.SurfaceFrame {
 		if ev.Paced && h.waitDisplay(time.Now()) {
@@ -403,6 +444,31 @@ type gpuRenderer interface {
 // size, as a GtkGLArea makes its buffers anew as GTK allocates it:
 // Invalidate has the next frame draw whole.
 type invalidator interface{ Invalidate() }
+
+// renewableRenderer is a GPU renderer that outlives the surface's native
+// objects (Android's, whose EGL context keeps its programs and textures
+// while the SurfaceView's surface goes and comes back): on SurfaceRenew,
+// Detach lets go of what draws into the old ones, and Attach draws into
+// the new ones, or reports why it cannot, and the renderer is then
+// released and made again. It draws whole after Attach (invalidator).
+type renewableRenderer interface {
+	gpuRenderer
+	Detach()
+	Attach(n platform.SurfaceNative) error
+}
+
+// releaseParked releases the renderer kept since SurfaceRenew.
+func (h *windowHost) releaseParked() {
+	if h.parked != nil {
+		h.parked.Release()
+		h.parked = nil
+	}
+}
+
+// occludedRenderer is a GPU renderer that gives back the memory of its
+// frames sooner while nothing of the window shows (Metal's, whose
+// drawables are each as large as the window): SetOccluded tells it.
+type occludedRenderer interface{ SetOccluded(bool) }
 
 // wideRenderer is a GPU renderer that can draw the colors of scenes outside
 // the sRGB gamut (Metal's).
@@ -506,16 +572,19 @@ func (h *windowHost) present(s *scene.Scene) {
 
 // ready tells the surface, after the first frame, that the frame reached
 // it, and the window that it is ready to show: once the frame returns, as
-// its listeners may show the window.
+// its listeners may show the window. The surface is told again of the
+// first frame on its new native objects (renewed), which Android's host
+// holds the window's first draw back for.
 func (h *windowHost) ready() {
-	if h.shown {
+	if h.shown && !h.renewed {
 		return
 	}
-	h.shown = true
+	first := !h.shown
+	h.shown, h.renewed = true, false
 	if f, ok := h.conn.Surface.(platform.FirstFrameSurface); ok {
 		f.FirstFrame()
 	}
-	if h.conn.Ready != nil && h.conn.Post != nil {
+	if first && h.conn.Ready != nil && h.conn.Post != nil {
 		h.conn.Post(h.conn.Ready)
 	}
 }
@@ -628,7 +697,11 @@ func (h *windowHost) makeGPU() {
 	if os.Getenv("MYGO_GPU") == "0" || n == (platform.SurfaceNative{}) {
 		return
 	}
-	r, err := newGPU(n)
+	var err error
+	r := h.attachParked(n)
+	if r == nil {
+		r, err = newGPU(n)
+	}
 	switch {
 	case err != nil:
 		log.Printf("mygo: drawing without the GPU: %v", err)
@@ -654,9 +727,39 @@ func (h *windowHost) makeGPU() {
 	}
 	h.gpu, h.gpuSince = r, time.Now()
 	h.wide = false // the renderer draws sRGB until told otherwise
+	h.tellOccluded()
 	if p, ok := r.(interface{ SetPost(func(func())) }); ok && h.conn.Post != nil {
 		// Frames waiting for the display draw through the main thread.
 		p.SetPost(h.conn.Post)
+	}
+}
+
+// attachParked returns the renderer kept since SurfaceRenew, drawing
+// into the surface's new native objects n, and nil when there is none or
+// it cannot: then it is released, and a new one made.
+func (h *windowHost) attachParked(n platform.SurfaceNative) gpuRenderer {
+	r := h.parked
+	if r == nil {
+		return nil
+	}
+	h.parked = nil
+	if err := r.Attach(n); err != nil {
+		log.Printf("mygo: making the GPU renderer again: %v", err)
+		r.Release()
+		return nil
+	}
+	if i, ok := r.(invalidator); ok {
+		// What it drew went with the old native objects.
+		i.Invalidate()
+	}
+	return r
+}
+
+// tellOccluded tells the GPU renderer whether nothing of the window shows,
+// as the surface sends SurfaceHidden and SurfaceShown, and as it is made.
+func (h *windowHost) tellOccluded() {
+	if r, ok := h.gpu.(occludedRenderer); ok {
+		r.SetOccluded(h.occluded())
 	}
 }
 
@@ -698,9 +801,13 @@ func (h *windowHost) retryLater() {
 
 // capture renders the last frame in memory: built now where none was yet,
 // or where one waits for the window to show (holdFrame, waitsOutOfSight),
-// so that a window out of sight shows what it shows now.
+// so that a window out of sight shows what it shows now; or where the
+// glyph atlases, which every window shares, moved or forgot the glyphs it
+// draws since it was painted, as another window making room in them does
+// (System.MakeRoom), as repaintParts tells: its text would show what took
+// their places (#1920). Within a frame, runFrame builds none.
 func (h *windowHost) capture() (int, int, []byte) {
-	if h.last == nil || h.rt.held || h.waitsOutOfSight() {
+	if h.last == nil || h.rt.held || h.waitsOutOfSight() || atlasGenerations(h.last) != h.rt.atlases {
 		h.rt.runFrame()
 	}
 	s := h.last
@@ -738,6 +845,9 @@ func (h *windowHost) fit() bool {
 
 func (h *windowHost) detach() {
 	h.detached = true
+	if h.stopFonts != nil {
+		h.stopFonts()
+	}
 	if h.idleTimer != nil {
 		h.idleTimer.Stop()
 	}
@@ -747,6 +857,7 @@ func (h *windowHost) detach() {
 		h.gpu.Release()
 		h.gpu = nil
 	}
+	h.releaseParked()
 	// The last frame, and the bitmaps it drew, go with the window (#1281).
 	h.last = nil
 	h.placed, h.views, h.glassPlaced = nil, nil, nil
@@ -755,6 +866,13 @@ func (h *windowHost) detach() {
 func (h *windowHost) requestFrame() {
 	h.frameAsked, h.unshown = true, false
 	h.conn.Surface.RequestFrame()
+}
+
+// frameAhead reports whether the content asks for its next frame as it
+// starts one while it animates (platform.FrameAheadSurface).
+func (h *windowHost) frameAhead() bool {
+	s, ok := h.conn.Surface.(platform.FrameAheadSurface)
+	return ok && s.FrameAhead()
 }
 
 // framesAtOnce reports whether the surface's frames come as soon as asked
@@ -958,6 +1076,14 @@ func (h *windowHost) textLanguage() {
 	h.textSystem().SetLanguage(h.locale())
 }
 
+// insets are those the surface tells, as a phone's.
+func (h *windowHost) insets() platform.Insets {
+	if s, ok := h.conn.Surface.(platform.InsetSurface); ok {
+		return s.Insets()
+	}
+	return platform.Insets{}
+}
+
 func (h *windowHost) titleBar() TitleBar {
 	if h.conn.TitleBar == nil {
 		return TitleBar{}
@@ -1023,7 +1149,7 @@ func (h *windowHost) placeWebViews(views []placedWebView) {
 	}
 	if slices.EqualFunc(list, h.placed, func(a, b platform.WebViewPlacement) bool {
 		return a.WebView == b.WebView && a.Frame == b.Frame && a.Clip == b.Clip && a.Width == b.Width && a.Height == b.Height &&
-			a.Radii == b.Radii && slices.Equal(a.Covers, b.Covers)
+			a.Radii == b.Radii && a.Opacity == b.Opacity && slices.Equal(a.Covers, b.Covers)
 	}) {
 		return
 	}
@@ -1043,6 +1169,16 @@ func (h *windowHost) tabIntoWebView(v NativeWebView, back bool) {
 	if n := v.SurfaceWebView(h.conn); n != nil {
 		n.TabInto(back)
 	}
+}
+
+func (h *windowHost) touchSurface() platform.TouchSurface {
+	s, _ := h.conn.Surface.(platform.TouchSurface)
+	return s
+}
+
+func (h *windowHost) stackSurface() platform.StackSurface {
+	s, _ := h.conn.Surface.(platform.StackSurface)
+	return s
 }
 
 func (h *windowHost) popupMenu(m *platform.Menu, x, y float32, chosen func(int)) {

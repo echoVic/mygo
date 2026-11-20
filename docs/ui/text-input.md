@@ -137,7 +137,7 @@ lines, as a log or a source file, and stays as quick to type in.
 ## Editing
 
 Text inputs edit as the platform's text fields do: selection with the
-pointer (a double click selects a word, a triple click a line), with Shift
+pointer (a double click selects a word, a triple click a paragraph), with Shift
 and the arrows, and by words and lines with the platform's keys; undo and
 redo; cut, copy and paste, also from the Edit menu's roles; and a context
 menu of the editing commands. They take text composed with input methods,
@@ -145,8 +145,11 @@ which see the text around the caret, so that press and hold, Japanese
 conversion and predictions work as in other apps. The keys typed while an
 input method composes are its own, as Enter choosing a candidate or Escape
 giving the composition up: they submit nothing, press no shortcut and
-close no dialog. `Composing` reports whether it composes, its text not yet
-in the string.
+close no dialog. Each platform's input method takes them before the app
+does, and a `Tester` takes them as it does, so `Compose` then `Key` shows
+what users get. Chords with Ctrl or Command that the input method leaves
+go to shortcuts as at any time. `Composing` reports
+whether it composes, its text not yet in the string.
 
 The input keeps the text being edited, its selection and its undo history
 from frame to frame; setting the string from elsewhere replaces the text.

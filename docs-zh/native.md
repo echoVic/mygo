@@ -37,7 +37,7 @@ if res.Button == 1 { /* Delete */ }
 mygo.Dialog.Error("Import failed", err.Error())
 ```
 
-`OpenDialogOptions` 还可以选择目录（`Directory`）、显示隐藏文件，以及在 macOS 上显示消息和“新建文件夹”按钮。
+`OpenDialogOptions` 还可以选择目录（`Directory`）、显示隐藏文件，以及在 macOS 上显示消息和“新建文件夹”按钮。在 Windows 上，在选择目录的对话框中选择库（例如“文档”）时，选中的是该库保存到的文件夹。
 
 过滤器也可以按类型选取文件，类似 HTML 的 `accept`：可以用 `MIMETypes` 指定 `"application/pdf"` 这样的类型，也可以用 `"image/*"` 指定一整类；系统选择器会按自己认识的类型来匹配，而不需要逐一列出所有扩展名：
 
@@ -470,4 +470,4 @@ err := mygo.GlobalShortcut.Register("CmdOrCtrl+Shift+Space", func() {
 
 函数在主线程上运行。快捷键使用[加速键](menus.md#快捷键)的语法；`Unregister`、`UnregisterAll` 和 `IsRegistered` 管理它们。快捷键已被占用时 `Register` 会失败：占用者可能是应用自己，也可能是另一个应用（如果系统会告知的话）。
 
-在 X11 下的 Linux 上，应用自己抓取按键。在 Wayland 下应用无法这样做，桌面会通过 XDG 桌面门户为应用绑定快捷键，KDE Plasma 6 和 GNOME 48 及更高版本提供该门户：桌面可能要求用户确认新快捷键，并允许他们改选其他按键；它需要应用已安装，因为它按桌面条目识别应用。快捷键在 `Register` 返回后不久生效。函数显示或聚焦的窗口，在桌面提供激活令牌时（GNOME 就是如此）会借助按键的激活令牌获得焦点。
+在 X11 下的 Linux 上，应用自己抓取按键。在 Wayland 下应用无法这样做，桌面会通过 XDG 桌面门户为应用绑定快捷键，KDE Plasma 6 和 GNOME 48 及更高版本提供该门户；在 Wayland 会话中通过 XWayland 运行的应用（`GDK_BACKEND=x11`）也是如此，因为它自己抓取的按键只有在它拥有焦点时才能收到：桌面可能要求用户确认新快捷键，并允许他们改选其他按键；它需要应用已安装，因为它按桌面条目识别应用。快捷键在 `Register` 返回后不久生效。函数显示或聚焦的窗口，在桌面提供激活令牌时（GNOME 就是如此）会借助按键的激活令牌获得焦点；在 XWayland 下，GNOME 会显示这些窗口但不给它们焦点，焦点留在用户正在使用的窗口上。

@@ -69,6 +69,13 @@ func (ed *editor) build(c *ui.Context, buf *Buffer, o options) ui.Element {
 		label = ed.texts.CodeEditor()
 	}
 	e.Role(ui.RoleTextField).Label(label).Access(ed.accessibility)
+	if _, diff := o.decor.(*diffSide); diff {
+		// Its lines in view, each read as what it is.
+		if ed.accessLinesFn == nil {
+			ed.accessLinesFn = ed.accessLines
+		}
+		e.AccessChildren(ed.accessLinesFn)
+	}
 	if !o.readOnly {
 		e.HandleTextInput(ed).InputMethod(!o.noInputMethod)
 		if o.noInputMethod && ed.markedActive {
@@ -134,22 +141,25 @@ func (ed *editor) build(c *ui.Context, buf *Buffer, o options) ui.Element {
 	}
 	e.Children(func() {
 		// Popups attach to boxes at the caret, or at the text hovered.
-		anchor := func(key string, at int) (ui.Element, bool) {
-			cr, ok := ed.caretRect(at)
-			if !ok {
-				return ui.Element{}, false
-			}
-			return ui.Box(c).Key(key).Absolute().Left(ed.textX+cr.X-ed.scrollX).Top(float32(float64(cr.Y)-ed.scrollY)).Size(1, cr.H).PassThrough(), true
+		var caretAnchor, hoverAnchor, popupAnchor ui.Element
+		var hasCaret, hasHover, hasPopup bool
+		if ed.popup.shown && ed.popup.version != ed.view.version {
+			ed.closePopup()
 		}
-		var caretAnchor, hoverAnchor ui.Element
-		var hasCaret, hasHover bool
+		if ed.popup.shown {
+			// A fold can hide the line it opened at, where there is nothing
+			// to attach it to.
+			if popupAnchor, hasPopup = ed.boxAt(c, "code popup anchor", ed.popup.at); !hasPopup {
+				ed.closePopup()
+			}
+		}
 		if ed.completing() {
-			caretAnchor, hasCaret = anchor("code caret", ed.complete.at)
+			caretAnchor, hasCaret = ed.boxAt(c, "code caret", ed.complete.at)
 		}
 		if h.shown {
-			hoverAnchor, hasHover = anchor("code hover anchor", h.start)
+			hoverAnchor, hasHover = ed.boxAt(c, "code hover anchor", h.start)
 		}
-		ed.buildReplacements(c)
+		ed.buildElements(c)
 		if ds, ok := ed.o.decor.(*diffSide); ok {
 			ds.buildBlocks(c, ed)
 		} else {
@@ -162,6 +172,10 @@ func (ed *editor) build(c *ui.Context, buf *Buffer, o options) ui.Element {
 		if hasHover {
 			ed.buildHover(c, hoverAnchor)
 		}
+		if hasPopup {
+			ed.buildPopup(c, popupAnchor)
+		}
+		ed.buildReveal(c)
 	})
 	// Once the hover has said whether the pointer or the keyboard is in
 	// it: the hover goes a grace after the pointer left the text hovered,
@@ -195,6 +209,39 @@ func (ed *editor) buildBars(c *ui.Context) {
 	}
 }
 
+// boxAt builds a 1 DIP wide box at the text at off, relative to the
+// editor, for a popup to attach to or a reveal to bring into view, and
+// whether the text shows.
+func (ed *editor) boxAt(c *ui.Context, key string, at int) (ui.Element, bool) {
+	cr, ok := ed.caretRect(at)
+	if !ok {
+		return ui.Element{}, false
+	}
+	return ui.Box(c).Key(key).Absolute().
+		Left(ed.textX+cr.X-ed.scrollX).
+		Top(float32(float64(cr.Y)-ed.scrollY)).
+		Size(1, cr.H).PassThrough(), true
+}
+
+// buildReveal builds an anchor at the text asked to come into view and
+// asks the containers around the editor to show it: a viewer as high as
+// its lines (FitContent) has no scroll of its own, so they scroll to it,
+// as they do for the caret of a text input.
+func (ed *editor) buildReveal(c *ui.Context) {
+	at := ed.revealAt
+	if at < 0 {
+		return
+	}
+	ed.revealAt = -1
+	if !ed.o.fitContent {
+		// The editor scrolls itself.
+		return
+	}
+	if box, ok := ed.boxAt(c, "code reveal", at); ok {
+		box.ScrollIntoView()
+	}
+}
+
 // accessibility describes the editor to assistive technology, while it
 // reads the window: a text area with its text, and the newest selection
 // in runes.
@@ -206,10 +253,13 @@ func (ed *editor) accessibility(n *platform.AccessNode) {
 	r := &ed.view.text
 	if r.Len() > 4<<20 {
 		// Assistive technology gets the lines in view of a very large text.
-		n.Value = ed.slice(r.LineStart(ed.anchorLine), r.LineEnd(min(r.LineCount()-1, ed.anchorLine+200)))
+		last := min(r.LineCount()-1, ed.anchorLine+200)
+		n.Value = ed.slice(r.LineStart(ed.anchorLine), r.LineEnd(last))
+		n.LineBoxes = ed.lineBoxes(ed.anchorLine, last)
 		return
 	}
 	n.Value = r.String()
+	n.LineBoxes = ed.lineBoxes(0, r.LineCount()-1)
 	p := ed.primary()
 	n.SelStart = utf8.RuneCountInString(n.Value[:min(p.start(), len(n.Value))])
 	n.SelEnd = n.SelStart + utf8.RuneCountInString(n.Value[min(p.start(), len(n.Value)):min(p.end(), len(n.Value))])

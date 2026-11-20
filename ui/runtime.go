@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"os"
 	"slices"
 	"sync"
 	"time"
@@ -158,8 +159,11 @@ type engine struct {
 	// afterInputs whose containers are still building.
 	waitingInputs, waitingActions []int
 
-	// measured are the last spans laid out outside elements (richParams).
-	measured     [8]measuredSpans
+	// measured are the last spans laid out outside elements, a ring made
+	// by the first (richSpans), and measuredAt the entries by their
+	// fingerprints.
+	measured     []measuredSpans
+	measuredAt   map[uint64]int32
 	nextMeasured int
 	paths        paths
 	// pathClips are the masks of the paths clips were cut to lately, by
@@ -316,6 +320,10 @@ type engine struct {
 	// paints counts the frames painted, those painting the last frame's
 	// elements again included.
 	paints uint64
+	// paintFrames counts the frames that paint, built or painting the
+	// last frame's elements again, however many times each paints
+	// (scaleWatch).
+	paintFrames uint64
 	// posed are the elements of the last frame built with a pose
 	// (AnimatePose), parents first.
 	posed        []*node
@@ -335,6 +343,7 @@ type engine struct {
 	// it.
 	dirOverride uint8
 	dupKeys     map[uint64]bool
+	lateKeys    map[uint64]bool
 	warnings    []string
 	// strict makes mistakes found while building panic, as duplicate keys
 	// do in a Tester.
@@ -355,7 +364,10 @@ type engine struct {
 	pressure      float32
 	buttons       uint8
 	pressureMoved bool
-	hover         []uint64
+	// touchIn follows the fingers on a touchscreen, nil until a view asks
+	// about them (Element.Touches).
+	touchIn fingerInput
+	hover   []uint64
 	// chain is a buffer for the elements under the pointer.
 	chain       []uint64
 	pressed     *state
@@ -528,9 +540,21 @@ type engine struct {
 	cursor    Cursor
 	// ime is the text input state the host has, and base the rune of the
 	// focused editor its text starts at.
-	ime struct {
+	// bouncing lists the containers springing back from past their ends, and
+	// bounceAt is when they last moved; barsFadeAt until when indicators show.
+	bouncing []uint64
+	// lastPointerTouch says the last pointer event was a finger's.
+	lastPointerTouch bool
+	dev              *devState
+	caught           []uint64
+	bounceAt         time.Time
+	barsFadeAt       time.Time
+	ime              struct {
 		state platform.TextInputState
 		base  int
+		// show counts the fingers that pressed the input with the focus,
+		// each of which asks for the on-screen keyboard.
+		show uint32
 	}
 	// drag is the value being dragged within the window.
 	drag        *valueDrag
@@ -546,6 +570,9 @@ type engine struct {
 	commitPage uint64
 	// commitHidden is set while commit is inside a Hidden element.
 	commitHidden bool
+	// commitFade is how opaque the elements being committed are, with what
+	// is inside them: what the painter fades them by as it paints them.
+	commitFade float32
 	// announcements are the texts for assistive technology to read out
 	// (Context.Announce).
 	announcements []string
@@ -587,6 +614,23 @@ type engine struct {
 	labels     []labelNode
 	tips       tooltips
 	scrollDrag scrollDrag
+	// touch is the finger on a touch screen, flinging the content it
+	// flung as it lifted (touch.go).
+	touch touchPan
+	// touchText is the handles of the selection, for fingers; keyboardWas
+	// the keyboard's inset as the last frame laid out.
+	touchText   touchText
+	keyboardWas float64
+	// edgeBack is the Router a gesture takes back, as the frame built it,
+	// and backSent what the surface was last told of taking back.
+	edgeBack *Router
+	backSent bool
+	// stack is what shows the pages of a Router as the system's stack of
+	// screens (router_stack.go).
+	stack routerStack
+	// swipeRouter is the Router a gesture is taking back, or giving up on.
+	swipeRouter *Router
+	flinging    fling
 	// wheeling are the elements of the scroll containers that the notches
 	// of a mouse wheel scroll smoothly (glideWheels).
 	wheeling []uint64
@@ -658,14 +702,21 @@ type keyEvent struct {
 }
 
 func newRuntime(view func(*context), h host) *engine {
+	// A phone's host sets the environment after the package's variables
+	// took it. Read, not kept: Recorders and Testers are made on many
+	// goroutines at once.
+	statsThreshold, statsOn := frameStatsThreshold, frameStatsOn
+	if !statsOn {
+		statsThreshold, statsOn = frameStatsSetting(os.Getenv("MYGO_FRAME_STATS"))
+	}
 	rt := &engine{view: view, host: h, text: h.textSystem(), states: map[uint64]*state{}, windowFocused: true}
 	rt.c.rt = rt
 	rt.owner = weak.Make(rt)
 	rt.arena = &elementOwner{rt: rt}
 	rt.public = &Context{rt: rt, services: Services{owner: rt.owner}}
 	rt.handleChecks = developmentHandles
-	if frameStatsOn {
-		rt.stats = newFrameStats(frameStatsThreshold)
+	if statsOn {
+		rt.stats = newFrameStats(statsThreshold)
 	}
 	return rt
 }
@@ -719,14 +770,18 @@ func (rt *engine) runFrame() {
 	rt.c.titleBar = rt.titleBar()
 	rt.c.vibrancy = rt.host.vibrancy()
 	rt.text.BeginFrame()
+	rt.paintFrames++
 	rt.paths.large = rt.paths.large[:0]
-	rt.paths.switching = false
+	rt.paths.switching, rt.paths.spill.last = false, false
 	rt.gen = rt.text.Generation()
 	rt.painted = [3]float32{w, h, scale}
 	rt.animating, rt.repainting, rt.repaintAt = false, false, time.Time{}
 	rt.repaintRate, rt.repaintFull, rt.untracked = 0, false, false
 	rt.routeKeys()
 	rt.glideWheels(now)
+	if touchFrame != nil {
+		touchFrame(rt, now)
+	}
 	rt.glideSnaps(now)
 	if d := rt.drag; d != nil {
 		// A copy of the source as it first showed, for the frames that
@@ -742,6 +797,7 @@ func (rt *engine) runFrame() {
 	if rt.listDrag != nil {
 		rt.listDrag(rt)
 	}
+	rt.frameAhead()
 	// What the scrolls since the last frame bring under the pointer
 	// hovers as the view builds.
 	rt.hoverScrolled()
@@ -773,7 +829,10 @@ func (rt *engine) runFrame() {
 		}
 		rt.nextRegs = rt.nextRegs[:0]
 		clear(rt.kept)
-		rt.c.reset(now, appW, h)
+		clear(rt.tips.pending)
+		rt.tips.pending = rt.tips.pending[:0]
+		rt.stack.router = nil // the pass's Router tells
+		rt.c.reset(now, appW, rt.insp.contentHeight(w, h))
 		rt.view(&rt.c)
 		if rt.closing {
 			// The view closed the window, as a close button does: the
@@ -784,6 +843,7 @@ func (rt *engine) runFrame() {
 		if d := rt.menu.drawn; d != nil && d.edit && rt.drawsMenus() {
 			menusInWindow.drawEditMenu(rt)
 		}
+		rt.buildTooltips(&rt.c)
 		if rt.overlayExits {
 			// Copies of the elements gone from the layer leave in it
 			// (animateExits), empty as it is otherwise: it lets the
@@ -795,6 +855,10 @@ func (rt *engine) runFrame() {
 		}
 		if rt.insp.open {
 			rt.buildInspector(&rt.c, appW, w, h)
+			rt.buildTooltips(&rt.c)
+			if ov := rt.c.overlay; ov != nil && ov.parent == nil {
+				rt.c.root.add(ov)
+			}
 		}
 		rt.applyAllInputs()
 		rt.runAfterBuild()
@@ -814,11 +878,12 @@ func (rt *engine) runFrame() {
 			break
 		}
 	}
-	if rt.zoomChanged {
-		// Zoomed in the last pass: laid out at the new size, and built
-		// at it in the next frame.
+	if nw, nh, ns := rt.size(); rt.zoomChanged || nw != w || nh != h || ns != scale {
+		// Zoomed in the last pass, or the view resized its native host:
+		// lay out and paint at the current size. Rebuild next frame for
+		// views that read Context.Size while building.
 		rt.zoomChanged = false
-		w, h, scale = rt.size()
+		w, h, scale = nw, nh, ns
 		appW = rt.insp.contentWidth(w)
 		rt.c.titleBar = rt.titleBar()
 		rt.painted = [3]float32{w, h, scale}
@@ -841,8 +906,14 @@ func (rt *engine) runFrame() {
 	}
 	rt.stats.lap(phaseBuild)
 	rt.insp.lap(0)
-	layoutTree(root, appW, h)
+	if insetRoot != nil {
+		insetRoot(rt, root)
+	}
+	layoutTree(root, appW, rt.insp.contentHeight(w, h))
 	rt.measureFit(root)
+	if extendScrolls != nil {
+		extendScrolls(rt, root, h)
+	}
 	if checkBuilt != nil {
 		checkBuilt(rt, builtLaidOut)
 	}
@@ -888,7 +959,9 @@ func (rt *engine) runFrame() {
 	}
 	rt.stats.lap(phasePaint)
 	rt.insp.lap(2)
+	rt.syncStack()
 	rt.host.present(&rt.scene)
+	rt.stackShown()
 	rt.placeWebViews()
 	rt.placeNativeGlass()
 	// The window hit-tests its maximize button in its own DIPs.
@@ -944,6 +1017,23 @@ func (rt *engine) runFrame() {
 	rt.c.finish()
 	clear(rt.byID)
 	rt.stats.end(rt)
+}
+
+// frameAhead asks for the next frame as this one starts, rather than once
+// it was presented (next), while what moved since the last (a fling, a
+// glide, a snap) goes on moving and some of the window shows, where the
+// surface asks the display for frames late (platform.FrameAheadSurface):
+// the frame after comes at the display's next refresh even when this one
+// takes most of one. next asks for it again, which the surface coalesces;
+// rt.animating, once set, stays set to the frame's end, so this asks for
+// no frame that next would not.
+func (rt *engine) frameAhead() {
+	if !rt.animating || rt.host.occluded() {
+		return
+	}
+	if a, ok := rt.host.(interface{ frameAhead() bool }); ok && a.frameAhead() {
+		rt.host.requestFrame()
+	}
 }
 
 // now returns the time, which a Tester sets (clock).
@@ -1120,8 +1210,9 @@ func (rt *engine) repaintFrame(w, h, scale float32) {
 	start := time.Now()
 	rt.c.now = rt.frameTime()
 	rt.text.BeginFrame()
+	rt.paintFrames++
 	rt.paths.large = rt.paths.large[:0]
-	rt.paths.switching = false
+	rt.paths.switching, rt.paths.spill.last = false, false
 	rt.repainting, rt.repaintAt = false, time.Time{}
 	// What the last frame painted outside Draw callbacks that asked to be
 	// painted again, as a content transition, moves only painted whole.
@@ -1165,12 +1256,18 @@ func (rt *engine) makeRoom(last bool) {
 		// keep their compacted layout once paths already draw as tiles.
 		rt.text.Unkeep(ps.large)
 	}
+	// What of the paths still finds no room in the last paint draws on
+	// the CPU (pathSpill).
+	ps.spill.last = last
 	rt.text.MakeRoom()
 }
 
 // endPass forgets the input the pass handled.
 func (rt *engine) endPass() {
 	rt.forgetInput()
+	if rt.touchIn != nil {
+		rt.touchIn.endPass(rt)
+	}
 	// Clicks the view gave its elements, which the next pass sees.
 	for _, id := range rt.clickLater {
 		if s := rt.states[id]; s != nil {
@@ -1503,10 +1600,12 @@ func (rt *engine) dropFrame() {
 	c := &rt.c
 	c.parent, c.root, c.overlay = nil, nil, nil
 	c.chunks, c.spare = nil, nil
+	c.splits = nil
 	c.used, c.dirty, c.spareDirty = 0, 0, 0
 	clear(rt.states)
 	rt.free = nil
 	rt.hits, rt.liftHits = nil, nil
+	rt.tips.pending = nil
 	rt.journal = journal{}
 	if checkBuilt != nil {
 		checkBuilt(rt, builtDropped)
@@ -1539,7 +1638,7 @@ func (rt *engine) commit(root *node, w, h float32) {
 	rt.glassPlaces = rt.glassPlaces[:0]
 	rt.maxButton = Rect{}
 	rt.focusOrder, rt.focusScopes = rt.focusOrder[:0], rt.focusScopes[:0]
-	rt.modal, rt.modalLayer, rt.commitScope, rt.commitPage = 0, 0, focusScope{}, 0
+	rt.modal, rt.modalLayer, rt.commitScope, rt.commitPage, rt.commitFade = 0, 0, focusScope{}, 0, 1
 	rt.observers = 0
 	if rt.groups == nil {
 		rt.groups = map[uint64]groupInfo{}
@@ -1563,7 +1662,10 @@ func (rt *engine) commitElement(e *node, clip Rect, hidden bool) {
 	savedHidden := rt.commitHidden
 	rt.commitHidden = savedHidden || e.hidden
 	saved, savedPage := rt.enterScope(e), rt.commitPage
-	defer func() { rt.commitScope, rt.commitPage, rt.commitHidden = saved, savedPage, savedHidden }()
+	savedFade := rt.commitFade
+	defer func() {
+		rt.commitScope, rt.commitPage, rt.commitHidden, rt.commitFade = saved, savedPage, savedHidden, savedFade
+	}()
 	s := e.st
 	if s == rt.pressed && s.input != nil && e.inputFn == nil {
 		// Another element took the place of the one pressed (prune), in
@@ -1578,10 +1680,20 @@ func (rt *engine) commitElement(e *node, clip Rect, hidden bool) {
 	if e.poseSet {
 		rt.samplePose(e)
 	}
+	// What the element fades by, with what its pose's Fade leaves, as the
+	// painter takes it: a web view noted under it shows none of its page
+	// where nothing of the element paints.
+	rt.commitFade *= e.fade()
 	e.world = e.transformAt(e.x, e.y)
+	var base scene.Affine
 	if e.parent != nil && e != e.c.overlay {
-		e.world = e.parent.world.Mul(e.world)
+		base = e.parent.world
+		if contentStretch != nil && e.parent.scrolls() {
+			base = contentStretch(base, e.parent)
+		}
+		e.world = base.Mul(e.world)
 	}
+	e.pinWorld = pinsOnly(e, base)
 	s.world = e.world
 	s.laidX, s.laidY = s.scrollX, s.scrollY
 	s.clips = e.flags&(flagClipX|flagClipY|flagScrollX|flagScrollY) != 0
@@ -1607,6 +1719,10 @@ func (rt *engine) commitElement(e *node, clip Rect, hidden bool) {
 		s.parent = 0
 	}
 	s.flags = e.flags
+	if s.fingersFrame != rt.frame && (s.refresh != nil || s.longPress) {
+		// What asked for them went, and this element has its place.
+		s.refresh, s.longPress = nil, false
+	}
 	s.rtl = e.rtl()
 	s.anchor = 0
 	if e.popover != nil {
@@ -1890,3 +2006,69 @@ func (rt *engine) overScrollbar(id uint64) bool {
 // cursorUnknown is the cursor the engine last set while the pointer is
 // over a web view, whose page set another.
 const cursorUnknown Cursor = 255
+
+// extendUnderBottom has the scroll containers that reach the bottom of
+// what the window's insets leave go on under the inset at the bottom, as
+// UIKit's scroll views go under a floating tab bar and the home
+// indicator, and Android's under the gesture bar: their content scrolls
+// there, and as far again, for its end to come out from under it. What
+// does not scroll stays clear of it.
+func (rt *engine) extendUnderBottom(root *node, h float32) {
+	hs, ok := rt.host.(interface{ insets() platform.Insets })
+	if !ok {
+		return
+	}
+	in := hs.insets()
+	b := float32(in.Bottom)
+	if rt.zoomed() {
+		b /= rt.contentZoom
+	}
+	if b <= 0 {
+		return
+	}
+	edge := h - b
+	var walk func(e *node)
+	walk = func(e *node) {
+		for c := e.first; c != nil; c = c.next {
+			if c.flags&flagScrollY != 0 {
+				if c.y+c.h >= edge-0.5 && c.y+c.h <= edge+0.5 {
+					c.h += b
+					c.contentH += float64(b)
+					journalKeep(rt, &c.barInset)
+					c.barInset[2] += b
+				}
+				continue // what scrolls inside moves with it
+			}
+			walk(c)
+		}
+	}
+	walk(root)
+}
+
+// padInsets keeps the content out from under what covers the window's
+// edges, as a phone's bars, cutout and keyboard: the root takes them as
+// padding, while the window's background fills them.
+func (rt *engine) padInsets(root *node) {
+	h, ok := rt.host.(interface{ insets() platform.Insets })
+	if !ok {
+		return
+	}
+	in := h.insets()
+	if in.Bottom > rt.keyboardWas+40 {
+		// The keyboard came up: what it covers of the input in use shows.
+		rt.revealFocus()
+	}
+	rt.keyboardWas = in.Bottom
+	if in == (platform.Insets{}) {
+		return
+	}
+	z := float32(1)
+	if rt.zoomed() {
+		z = rt.contentZoom
+	}
+	journalKeep(rt, &root.pad)
+	root.pad[0] += float32(in.Top) / z
+	root.pad[1] += float32(in.Right) / z
+	root.pad[2] += float32(in.Bottom) / z
+	root.pad[3] += float32(in.Left) / z
+}

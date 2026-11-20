@@ -69,7 +69,7 @@ mygo dev [flags] [dir]
 
 开发应用，支持实时重载。它写出 TypeScript 客户端，运行配置中的 `devCommand`（例如 Vite 开发服务器），等待 `devUrl` 响应，然后构建一个开发版应用并启动它；这个应用加载 `devUrl`，而不是构建好的前端。没有 `devUrl` 时，应用从磁盘提供 `frontendDist`。
 
-对 Go 代码、配置、图标、资源或[消息目录](i18n.md)的更改会重新构建应用，重新生成 TypeScript 客户端和消息目录的函数，并重启应用：正在运行的构建先退出，新构建再启动，所以两者绝不会同时占用相同的文件、锁或 webview 配置。编译失败时，不会替换正在运行的应用。前端更改由开发服务器处理。退出应用或按 Ctrl+C 会结束 mygo dev（再按一次 Ctrl+C 可以不等应用退出），而 `App.Relaunch` 会用传给它的参数重启应用。
+对 Go 代码、配置、图标、资源或[消息目录](i18n.md)的更改会重新构建应用，重新生成 TypeScript 客户端和消息目录的函数，并重启应用：正在运行的构建先退出，新构建再启动，所以两者绝不会同时占用相同的文件、锁或 webview 配置。编译失败时，不会替换正在运行的应用。前端更改由开发服务器处理。退出应用或按 Ctrl+C 会结束 mygo dev（再按一次 Ctrl+C 可以不等应用退出），而 `App.Relaunch` 会用传给它的参数重启应用。在同一个会话中，每次构建的窗口都会回到上一次构建的窗口所在的位置，保持原来的大小，以及最大化或全屏状态，所以放在另一块显示器上的窗口会留在那里：这适用于没有 [`StateKey`](windows.md#记住窗口的位置) 的窗口（有的窗口自己保存状态），按应用创建它们的顺序对应。如果窗口的代码要求的位置或大小与上一次构建不同，它会得到代码要求的位置和大小。
 
 在终端中，每个步骤会显示一个旋转指示器，说明当前在做什么，例如正在编译的 Go 包，随后显示这一步的耗时；开发服务器和应用打印的内容分别标记为 `web │` 和 `app │`，重新构建会列出发生变化的文件。像在 Vite 中一样，按一个键再按 Enter：`r` 重新构建并重启应用，`c` 清空控制台，`q` 退出，`h` 列出这些按键。`NO_COLOR` 关闭颜色；输出到文件或管道时，每个步骤占一行。
 
@@ -89,7 +89,7 @@ mygo dev [flags] [dir]
 | `-port` | 使用 `-web` 时，供应用使用的端口，或下一个空闲端口（默认：5174） |
 | `-open` | 使用 `-web` 时，在浏览器中打开应用（默认：true） |
 | `-lang` | 以某种语言运行应用，例如 `de` 或 `zh-Hant`，或伪区域设置 `en-XA` 或 `ar-XB`，但不改变应用保存的语言；见[尝试一种语言](i18n.md#试用一种语言) |
-| `-background` | 启动应用，并在每次重新构建后再次启动它，而不把它带到前台：它的窗口显示时不带焦点，直到你点击其中一个，这样你保存时编辑器仍保持焦点（Windows 上最大化的窗口仍会获得焦点） |
+| `-background` | 启动应用，并在每次重新构建后再次启动它，而不把它带到前台：它的窗口显示时不带焦点，直到你点击其中一个，这样你保存时编辑器仍保持焦点（Windows 上最大化的窗口仍会获得焦点）；在 macOS 和 Windows 上，窗口显示在你正在使用的应用后面，而不是盖在它上面 |
 
 ## mygo build
 
@@ -133,7 +133,7 @@ mygo i18n check [dir]
 
 ## mygo native
 
-与原生模块一样是实验性的：这些命令及其标志可能在任何发布版本中改变。这些命令用于[原生模块](native-modules.md)——用 Swift、Rust 或 Zig 实现的 Go 接口，按平台构建成一个库——以及包用 `ffi` 绑定的 C 库（[自己绑定一个 C 库](native-modules.md#自己绑定-c-库)）。`[module dir]` 默认为当前目录。
+与原生模块一样是实验性的：这些命令及其标志可能在任何发布版本中改变。这些命令用于[原生模块](native-modules.md)——用 Swift、Kotlin、Rust 或 Zig 实现的 Go 接口，按平台构建成一个库（在手机上随应用构建）——以及包用 `ffi` 绑定的 C 库（[自己绑定一个 C 库](native-modules.md#自己绑定-c-库)）。`[module dir]` 默认为当前目录。
 
 ### mygo native build
 
@@ -158,7 +158,7 @@ mygo native build [flags] [dir]
 mygo native new [-lang <languages>] <module name>
 ```
 
-在 `modules/<module name>` 中创建模块，或者在给出路径而不是名称时，在该路径创建：包含接口的 Go 包、为它生成的 Go 代码、一个 `AGENTS.md`，以及每种语言一个目录。`-lang` 接受以逗号分隔的语言：`swift`（默认）、`rust`、`zig`，或 `none`，表示只有 Go 部分。
+在 `modules/<module name>` 中创建模块，或者在给出路径而不是名称时，在该路径创建：包含接口的 Go 包、为它生成的 Go 代码、一个 `AGENTS.md`，以及每种语言一个目录。`-lang` 接受以逗号分隔的语言：`swift`（默认）、`kotlin`、`rust`、`zig`，或 `none`，表示只有 Go 部分。
 
 ### mygo native add
 
@@ -166,7 +166,7 @@ mygo native new [-lang <languages>] <module name>
 mygo native add <language> [module dir]
 ```
 
-为现有模块添加另一种语言（`swift`、`rust` 或 `zig`）的实现，生成每个入口点的工厂函数和返回“不支持”错误的方法，使模块立即可以构建。
+为现有模块添加另一种语言（`swift`、`kotlin`、`rust` 或 `zig`）的实现，生成每个入口点的工厂函数和返回“不支持”错误的方法，使模块立即可以构建。
 
 ### mygo native check
 

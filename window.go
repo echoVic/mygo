@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -60,6 +61,10 @@ type Rectangle struct{ X, Y, Width, Height int }
 // WindowOptions configures NewWindow. The zero value is a visible,
 // resizable 800x600 window centered on screen.
 type WindowOptions struct {
+	// OwnScene opens the window as a window of the system's own on iPad, beside
+	// the app's others, which ios.multipleWindows in mygo.json allows. Elsewhere
+	// it's a window as any: on a phone or Android, over the one before.
+	OwnScene bool
 	// Title of the window. Defaults to the application name. The title
 	// follows the page's <title> unless an OnPageTitleUpdated listener
 	// prevents it.
@@ -324,6 +329,10 @@ type Window struct {
 	// keepActive, that SetActiveAppearance keeps it active. Main thread
 	// only.
 	active, focusKnown, keepActive bool
+	// focusedAt orders the windows by when they last had the keyboard,
+	// from focusCount, 0 for never: raiseApp shows the latest. Main
+	// thread only.
+	focusedAt uint64
 	// fit sizes a window that takes its page's size (FitContent), nil
 	// for others. Main thread only.
 	fit *fitContent
@@ -366,6 +375,9 @@ type Window struct {
 	destroyed atomic.Bool
 	shown     bool
 	readyShow bool
+	// loads counts the loads the app asked the page for, so that a failed
+	// load knows whether its listeners started another. Main thread only.
+	loads int
 	// showLater tells that NewWindow left showing the window of native UI
 	// to the main loop's next turn (settleShow), and framing that its
 	// content draws a frame. Main thread only.
@@ -378,6 +390,9 @@ type Window struct {
 	// hear the room the window controls take. Main thread only.
 	hiddenTitleBar bool
 	menu           *Menu
+	// thumbBar is what SetThumbBar set last; a button's Click is looked up
+	// here by the position the shell reports. Main thread only.
+	thumbBar []ThumbButton
 	// title is the title the app or the page set; representedFile and
 	// documentEdited are the document the window shows. Main thread only.
 	title           string
@@ -387,6 +402,10 @@ type Window struct {
 	// once it settled. Main thread only.
 	stateKey   string
 	stateTimer *time.Timer
+	// devSlot is the place, from 1, of a window without a stateKey in
+	// what mygo dev keeps of the windows (restoreDevWindow), 0 for none.
+	// Main thread only.
+	devSlot int
 
 	// trusted reports whether the current page may call bound methods.
 	// Main thread only.
@@ -413,6 +432,16 @@ type Window struct {
 	// closedEarly holds the channels the current page closed before
 	// their calls made them, with the page's token.
 	closedEarly map[int64]string
+	// cancels are the calls of the current page that it may cancel, by
+	// the page's id for them, with the page's token.
+	cancels map[int64]pageCancel
+	// ran holds the ids of the calls of the current page that ran and
+	// are over, oldest first: a cancel that comes after their reply left
+	// finds them here, and is dropped.
+	ran []int64
+	// canceledEarly holds the calls the current page canceled before
+	// their calls made them, with the page's token.
+	canceledEarly map[int64]string
 
 	outMu    sync.Mutex
 	outbox   []message
@@ -510,6 +539,10 @@ var windows struct {
 	list    []*Window
 	focused *Window
 }
+
+// focusCount counts the times a window took the keyboard
+// (Window.focusedAt). Main thread only.
+var focusCount uint64
 
 // NewWindow creates a window. It must be called after the application is
 // ready (see Application.WhenReady); when called from another goroutine it
@@ -626,6 +659,7 @@ func newWindow(opts WindowOptions, bg, tint *background, native uintptr, flyout 
 	popts := w.platformOptions(&opts)
 	popts.BackgroundColor = w.backgroundColor()
 	popts.Surface = opts.Content != nil
+	popts.OwnScene = opts.OwnScene
 	if opts.Transparent {
 		// Backends keep transparent windows clear; so do theme changes.
 		w.background = nil
@@ -647,6 +681,8 @@ func newWindow(opts WindowOptions, bg, tint *background, native uintptr, flyout 
 	w.devTools = popts.DevTools
 	if w.stateKey != "" {
 		restoreWindowState(w.stateKey, popts)
+	} else {
+		w.restoreDevWindow(popts, native)
 	}
 	w.title = popts.Title
 	if s := opts.Page.Session; s != nil && opts.Content == nil {
@@ -668,7 +704,7 @@ func newWindow(opts WindowOptions, bg, tint *background, native uintptr, flyout 
 		// reaches it in between.
 		nw.SetIgnoreMouseEvents(true)
 	}
-	if w.stateKey != "" {
+	if w.stateKey != "" || w.devSlot > 0 {
 		w.initState(popts)
 	}
 	if w.content {
@@ -749,6 +785,7 @@ func (w *Window) platformOptions(o *WindowOptions) *platform.WindowOptions {
 		Autoplay:               po.Autoplay == AutoplayAllow,
 		SwipeNavigation:        po.SwipeNavigation,
 		PinchZoom:              po.PinchZoom,
+		ZoomControl:            po.ZoomControl,
 		Schemes:                Protocol.schemes(),
 		Panel:                  o.Panel,
 		PictureInPicture:       po.PictureInPicture,
@@ -1048,6 +1085,16 @@ func (w *Window) Blur() { w.do(platform.Window.Blur) }
 
 // IsFocused reports whether the window has keyboard focus.
 func (w *Window) IsFocused() bool { return get(w, platform.Window.IsFocused) }
+
+// CornerRadius returns the radius, in DIPs, that the window's corners are
+// rounded to on screen, for content inset from its edges to round its own
+// corners concentric with them: a card inset by d takes CornerRadius less
+// d. On macOS it is the frameless window's WindowOptions.CornerRadius, or
+// the one the system draws the window with, which depends on the system
+// and the title bar (on macOS 26, 26 with TitleBarHiddenInset's toolbar
+// and 16 without one); on Windows 11, the 8 of its rounded windows. It is 0 where the corners are square (full screen, a maximized
+// window on Windows, Linux, browsers) or the system does not tell it.
+func (w *Window) CornerRadius() float64 { return get(w, platform.Window.CornerRadius) }
 
 // Minimize minimizes the window.
 func (w *Window) Minimize() { w.do(platform.Window.Minimize) }
@@ -1503,6 +1550,81 @@ func (w *Window) SetIcon(png []byte) error {
 	return err
 }
 
+// ThumbButton is a button of the window's thumbnail toolbar, the row of
+// small buttons Windows shows under a taskbar button's live preview. See
+// SetThumbBar.
+type ThumbButton struct {
+	// Icon is a PNG image for the button. On updates, nil keeps the
+	// button's existing icon.
+	Icon []byte
+	// ToolTip names the button for the user.
+	ToolTip string
+	// Disabled grays the button out; Hidden keeps it out of the toolbar.
+	Disabled bool
+	Hidden   bool
+	// Click is called on the main thread when the user clicks the button.
+	Click func(b *ThumbButton, win *Window)
+}
+
+// SetThumbBar sets the window's thumbnail toolbar (Windows):
+//
+//	win.SetThumbBar([]mygo.ThumbButton{
+//	    {Icon: back, ToolTip: "Back", Click: goBack},
+//	    {Icon: play, ToolTip: "Play", Click: play},
+//	})
+//
+// The first call fixes the buttons' count and order; later calls update
+// their icons (passing new PNGs, or nil to keep them),
+// tooltips, Disabled and Hidden state, and replace their Click functions.
+// The toolbar takes one to 7 buttons, and a later call that changes their
+// number fails with an error. A button's Click runs on the main thread.
+// Elsewhere SetThumbBar returns errors.ErrUnsupported.
+func (w *Window) SetThumbBar(buttons []ThumbButton) error {
+	if len(buttons) == 0 {
+		return errors.New("mygo: a thumbnail toolbar takes one or more buttons")
+	}
+	if len(buttons) > 7 {
+		return errors.New("mygo: a thumbnail toolbar takes at most 7 buttons")
+	}
+	var err error
+	w.do(func(n platform.Window) {
+		tb, ok := n.(platform.ThumbBarWindow)
+		if !ok {
+			err = platform.ErrUnsupported
+			return
+		}
+		// Link the backend hook on the main thread: WndProc and applyTaskbar
+		// read these vars on that thread.
+		linkThumbBars()
+		updating := len(w.thumbBar) != 0
+		if updating && len(buttons) != len(w.thumbBar) {
+			err = errors.New("mygo: the buttons of a thumbnail toolbar cannot change once they are set")
+			return
+		}
+		// The shell reports a click by the button's position.
+		updated := make([]ThumbButton, len(buttons))
+		native := make([]platform.ThumbButton, len(buttons))
+		for i, b := range buttons {
+			switch {
+			case len(b.Icon) > 0:
+				b.Icon = slices.Clone(b.Icon)
+			case updating:
+				b.Icon = w.thumbBar[i].Icon
+			default:
+				err = errors.New("mygo: a thumbnail toolbar button needs an icon")
+				return
+			}
+			updated[i] = b
+			native[i] = platform.ThumbButton{Icon: b.Icon, ToolTip: b.ToolTip,
+				Disabled: b.Disabled, Hidden: b.Hidden}
+		}
+		if err = tb.SetThumbBar(native); err == nil {
+			w.thumbBar = updated
+		}
+	})
+	return err
+}
+
 // SetMenu sets the menu bar of this window (Linux, Windows). On macOS the
 // menu bar belongs to the application; see Application.SetMenu.
 func (w *Window) SetMenu(m *Menu) {
@@ -1540,6 +1662,7 @@ func (p *Page) LoadURL(rawURL string) error {
 	}
 	p.w.page(func(n platform.Window) {
 		p.w.html = nil
+		p.w.loads++
 		n.LoadURL(resolved)
 	})
 	return nil
@@ -1558,6 +1681,7 @@ func (p *Page) LoadFile(path string) error {
 	}
 	p.w.page(func(n platform.Window) {
 		p.w.html = nil
+		p.w.loads++
 		n.LoadFile(abs, filepath.Dir(abs))
 	})
 	return nil
@@ -1636,6 +1760,7 @@ type htmlDocument struct {
 // thread only.
 func (w *Window) loadHTML(n platform.Window, html, baseURL string) {
 	w.html = &htmlDocument{html: html, baseURL: baseURL}
+	w.loads++
 	n.LoadHTML(html, baseURL)
 }
 
@@ -1654,10 +1779,12 @@ func (d *htmlDocument) isAt(url string) bool {
 }
 
 // Reload reloads the page.
-func (p *Page) Reload() { p.w.page(func(n platform.Window) { n.Reload(false) }) }
+func (p *Page) Reload() { p.w.page(func(n platform.Window) { p.w.loads++; n.Reload(false) }) }
 
 // ReloadIgnoringCache reloads the page bypassing the cache.
-func (p *Page) ReloadIgnoringCache() { p.w.page(func(n platform.Window) { n.Reload(true) }) }
+func (p *Page) ReloadIgnoringCache() {
+	p.w.page(func(n platform.Window) { p.w.loads++; n.Reload(true) })
+}
 
 // Stop stops loading the page.
 func (p *Page) Stop() { p.w.page(platform.Window.StopLoading) }
@@ -1875,10 +2002,106 @@ func (w *Window) resetPage() {
 	w.pageCtx, w.pageCancel = ctx, cancel
 	w.channels = nil // they close with the previous page's context
 	w.closedEarly = nil
+	w.cancels = nil
+	w.ran = nil
+	w.canceledEarly = nil
 	w.mu.Unlock()
 	if prev != nil {
 		prev()
 	}
+}
+
+// pageCancel is a call of a page that the page may cancel. A call with no
+// cancel left is one that ran and is over: it is kept, so a cancel that
+// comes after the reply left for the page finds it here.
+type pageCancel struct {
+	token  string
+	cancel context.CancelFunc
+}
+
+// maxCanceledEarly bounds the calls a page may cancel before their calls
+// made them.
+const maxCanceledEarly = 1024
+
+// maxRan bounds the calls of a page that are remembered as run. A cancel
+// reaches the page's window within a reply's journey of the call it gives
+// up, so the ids of the calls that ran lately are enough.
+const maxRan = 1024
+
+// addCancel remembers the cancel of a call of the current page, so that
+// the page may cancel it with a signal. A cancel that came before the
+// call was made, as of a page aborting what it just started, cancels it
+// here and now.
+func (w *Window) addCancel(id int64, token string, cancel context.CancelFunc) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.cancels == nil {
+		w.cancels = map[int64]pageCancel{}
+	}
+	w.cancels[id] = pageCancel{token: token, cancel: cancel}
+	if tok, ok := w.canceledEarly[id]; ok && tok == token {
+		delete(w.canceledEarly, id)
+		cancel()
+	}
+}
+
+// removeCancel ends the call of the page with the id: its cancel is of no
+// use now, and a cancel that came before the call made it is dropped with
+// it. The id stays as one that ran, so a cancel that comes after the reply
+// left for the page finds it here and is dropped, rather than waiting in
+// canceledEarly until the page reloads: a page that lives long would fill
+// it, and its early cancels would be forgotten. The ids of the calls that
+// ran go oldest first, as a cancel for a call that ended longer ago than
+// a reply's journey would have come by now.
+func (w *Window) removeCancel(id int64, token string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	c, ok := w.cancels[id]
+	if !ok || c.token != token {
+		// The page reloaded or navigated while the call ran, or gave the
+		// call up: the call is of no page's business now, and the id may
+		// be the one of a call of the page that loaded since.
+		return
+	}
+	delete(w.canceledEarly, id)
+	w.cancels[id] = pageCancel{token: token}
+	w.ran = append(w.ran, id)
+	for len(w.ran) > maxRan {
+		old := w.ran[0]
+		w.ran = w.ran[1:]
+		if c, ok := w.cancels[old]; ok && c.cancel == nil {
+			delete(w.cancels, old)
+		}
+	}
+}
+
+// cancelCall cancels the call of the page with the id, if the page may
+// cancel it: the method's context is canceled, and its reply is of no
+// use to the page, which gave it up. Calls make their cancels on
+// goroutines of their own, so the page may cancel one before its call
+// made it, e.g. by aborting a request right after starting it: the call
+// is then canceled as soon as it makes it.
+func (w *Window) cancelCall(id int64, token string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	c, ok := w.cancels[id]
+	if !ok {
+		if len(w.canceledEarly) < maxCanceledEarly {
+			if w.canceledEarly == nil {
+				w.canceledEarly = map[int64]string{}
+			}
+			w.canceledEarly[id] = token
+		}
+		return
+	}
+	if c.token != token {
+		return // another page's call
+	}
+	delete(w.cancels, id)
+	if c.cancel == nil {
+		return // the call ran and is over: there is nothing left to cancel
+	}
+	c.cancel()
 }
 
 // pageContext returns the context of the current page. It is canceled when
@@ -1983,7 +2206,9 @@ func (w *Window) OnHide(fn func()) (off func()) { return w.onHide.add(fn, false)
 
 // OnReadyToShow is called once, when the first page is ready to be
 // displayed. Create the window with Hidden and call Show here to avoid a
-// visual flash. A window showing Content is ready once it drew its first
+// visual flash. A page that failed to load makes the window ready too,
+// unless an OnDidFailLoad listener loaded another, which the window then
+// waits for. A window showing Content is ready once it drew its first
 // frame, which a hidden window draws while hidden.
 func (w *Window) OnReadyToShow(fn func()) (off func()) { return w.onReadyToShow.add(fn, false) }
 
@@ -2144,7 +2369,8 @@ func (h *windowHandler) Focused() {
 	windows.Lock()
 	windows.focused = h.w
 	windows.Unlock()
-	h.w.focusKnown = true
+	focusCount++
+	h.w.focusKnown, h.w.focusedAt = true, focusCount
 	scheduleActive()
 	fire(&h.w.onFocus)
 }
@@ -2162,6 +2388,18 @@ func (h *windowHandler) Blurred() {
 func (h *windowHandler) MenuItemClicked(id int) {
 	if h.w.native != nil {
 		menuItemClicked(id, h.w)
+	}
+}
+
+// ThumbButtonClicked runs the Click of the thumbnail toolbar button at id,
+// the position SetThumbBar gave it. The shell only reports clicks of
+// buttons that are shown and enabled, and the toolbar's size keeps the
+// slice's, so the check is for the cross-layer id alone.
+func (h *windowHandler) ThumbButtonClicked(id int) {
+	if h.w.native != nil && id >= 0 && id < len(h.w.thumbBar) {
+		if b := &h.w.thumbBar[id]; b.Click != nil {
+			b.Click(b, h.w)
+		}
 	}
 }
 
@@ -2251,7 +2489,15 @@ func (h *windowHandler) LoadFinished() {
 
 func (h *windowHandler) LoadFailed(url string, code int, desc string) {
 	h.w.themeColorSettled()
+	loads := h.w.loads
 	fire1(&h.w.onDidFailLoad, &LoadError{URL: url, Code: code, Description: desc})
+	// A page that failed to load never reports DOM ready, and its load
+	// never finishes: a window shown from OnReadyToShow would stay hidden
+	// for good. A listener that loaded another page instead, as one of
+	// the app's saying what went wrong, leaves the window to that page.
+	if h.w.loads == loads {
+		h.w.readyToShow()
+	}
 }
 
 func (h *windowHandler) TitleChanged(title string) {
@@ -2318,6 +2564,10 @@ func (h *windowHandler) AudibleChanged(audible bool) {
 	h.w.audible = audible
 	fire1(&h.w.onAudibleChanged, audible)
 }
+
+// ZoomChanged tells the page and its window of a zoom the user chose, as
+// SetZoomFactor does of the app's.
+func (h *windowHandler) ZoomChanged() { h.w.zoomChanged() }
 
 func (h *windowHandler) CaptureStateChanged(kind platform.CaptureKind, state platform.CaptureState) {
 	k := CaptureKind(kind)

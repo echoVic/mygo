@@ -120,10 +120,13 @@ func (a *app) editorPage(c *ui.Context, f *file) {
 	}
 	st.SetDiagnostics(st.Buffer.Version(), todos(st.Buffer))
 	if a.preview && isMarkdown(f) {
-		st.SetReplacements(livePreview(st))
+		rs, blocks := livePreview(st)
+		st.SetReplacements(rs)
+		st.SetBlocks(blocks)
 		st.SetLineStyles(headingStyles(st.Buffer))
 	} else {
 		st.SetReplacements(nil)
+		st.SetBlocks(nil)
 		st.SetLineStyles(nil)
 	}
 	editor.View(c, st).Grow(1).FillWidth().AutoFocus()
@@ -163,7 +166,7 @@ func (a *app) diffPage(c *ui.Context, f *file) {
 	default:
 		d.Inline = editor.DiffInlineWordAlt
 	}
-	if len(d.Hunks()) == 0 {
+	if len(d.Hunks()) == 0 && !d.Comparing() {
 		ui.Column(c).Grow(1).Center().Children(func() {
 			ui.Text(c, "No changes").FontSize(18).Bold()
 			ui.Text(c, "Edit "+f.name+" to see its changes here.").TextColor(c.Theme().TextMuted)

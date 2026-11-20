@@ -127,6 +127,56 @@ func TestCodeEditorTyping(t *testing.T) {
 	ct.want("([abc])")
 }
 
+func TestCodeEditorAutoPairCJK(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		lang string
+		init string
+		typ  string
+		want string
+	}{
+		// Symmetric quotes and backticks auto-pair after CJK characters.
+		{name: "double-quote-after-han", lang: "go", init: "中|", typ: `"`, want: `中"|"`},
+		{name: "single-quote-after-han", lang: "python", init: "中文|", typ: `'`, want: `中文'|'`},
+		{name: "backtick-after-han", lang: "markdown", init: "中文|", typ: "`", want: "中文`|`"},
+		{name: "quote-after-hiragana", lang: "go", init: "あ|", typ: `"`, want: `あ"|"`},
+		{name: "quote-after-katakana", lang: "go", init: "ア|", typ: `"`, want: `ア"|"`},
+		{name: "quote-after-hangul", lang: "go", init: "한|", typ: `"`, want: `한"|"`},
+		{name: "backtick-after-hiragana", lang: "markdown", init: "あ|", typ: "`", want: "あ`|`"},
+		// Brackets and quotes auto-pair before closing CJK/smart brackets and trailing punctuation.
+		{name: "paren-before-cjk-period", lang: "markdown", init: "你好|。", typ: "(", want: "你好(|)。"},
+		{name: "bracket-before-cjk-comma", lang: "markdown", init: "你好|，", typ: "[", want: "你好[|]，"},
+		{name: "paren-before-cjk-comma", lang: "markdown", init: "|，", typ: "(", want: "(|)，"},
+		{name: "paren-before-cjk-closing-paren", lang: "markdown", init: "|）", typ: "(", want: "(|)）"},
+		{name: "paren-before-cjk-closing-corner", lang: "markdown", init: "「你好|」", typ: "(", want: "「你好(|)」"},
+		{name: "quote-after-han-before-cjk-period", lang: "go", init: "你好|。", typ: `"`, want: `你好"|"。`},
+		{name: "quote-before-cjk-closing-quote", lang: "go", init: "你好|”", typ: `"`, want: `你好"|"”`},
+		{name: "paren-before-cjk-closing-single-quote", lang: "markdown", init: "‘你好|’", typ: "(", want: "‘你好(|)’"},
+		{name: "paren-before-cjk-tilde", lang: "markdown", init: "你好|～", typ: "(", want: "你好(|)～"},
+		{name: "paren-before-cjk-middle-dot", lang: "markdown", init: "你好|·", typ: "(", want: "你好(|)·"},
+		// Do not auto-pair before opening CJK/smart brackets/quotes or general fullwidth symbols.
+		{name: "no-autopair-before-fullwidth-open-paren", lang: "markdown", init: "|（a）", typ: "(", want: "(|（a）"},
+		{name: "no-autopair-before-cjk-open-corner", lang: "go", init: "|「a」", typ: `"`, want: `"|「a」`},
+		{name: "no-autopair-before-smart-open-double-quote", lang: "markdown", init: "|“a”", typ: "(", want: "(|“a”"},
+		{name: "no-autopair-before-smart-open-single-quote", lang: "markdown", init: "|‘a’", typ: "(", want: "(|‘a’"},
+		{name: "no-autopair-before-fullwidth-hash", lang: "markdown", init: "|＃a", typ: "(", want: "(|＃a"},
+		{name: "no-autopair-before-fullwidth-quote", lang: "markdown", init: "|＂a", typ: "(", want: "(|＂a"},
+		// Latin contractions and trailing word characters still do not auto-pair.
+		{name: "latin-contraction", lang: "python", init: "don|", typ: `'`, want: "don'|"},
+		{name: "latin-contraction-before-ascii-apostrophe", lang: "python", init: "don|'t", typ: `'`, want: "don'|'t"},
+		{name: "latin-contraction-before-curly-apostrophe", lang: "python", init: "don|’t", typ: `'`, want: "don'|’t"},
+		{name: "latin-double-quote", lang: "go", init: "word|", typ: `"`, want: `word"|`},
+		// Do not auto-pair immediately before another Han character.
+		{name: "before-han-char", lang: "go", init: "中|文", typ: `"`, want: `中"|文`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ct := newEditorTest(t, tc.lang, tc.init)
+			ct.typ(tc.typ)
+			ct.want(tc.want)
+		})
+	}
+}
+
 func TestCodeEditorNewline(t *testing.T) {
 	ct := newEditorTest(t, "go", "func main() {|}")
 	ct.key(0, ui.KeyEnter)
@@ -566,6 +616,22 @@ func TestCodeEditorComposition(t *testing.T) {
 	ct.want("a|b\nc|d")
 }
 
+// Enter while an input method composes is its own, as choosing a
+// candidate: the editor breaks no line and leaves the composition to the
+// input method, which commits it (#1815).
+func TestCodeEditorComposingEnter(t *testing.T) {
+	ct := newEditorTest(t, "", "a|b")
+	ct.tt.Compose("に", 1)
+	ct.key(0, ui.KeyEnter)
+	ct.want("aに|b")
+	if _, marked := ct.st.ed.MarkedRange(); !marked {
+		t.Fatal("Enter ended the composition")
+	}
+	ct.tt.Type("に")
+	ct.key(0, ui.KeyEnter)
+	ct.want("aに\n|b")
+}
+
 func TestCodeEditorFind(t *testing.T) {
 	ct := newEditorTest(t, "", "|cat Cat cat dog")
 	ct.st.Find("cat")
@@ -678,6 +744,58 @@ func TestCodeEditorFoldImports(t *testing.T) {
 	if !ct.st.ed.foldable(0) || ct.st.ed.foldable(1) {
 		t.Errorf("foldable %v %v, want the first line only", ct.st.ed.foldable(0), ct.st.ed.foldable(1))
 	}
+}
+
+// TestSelectSmallerAfterEdit checks that the selections Select Larger grew
+// move with the text edited since, as the carets do: Select Smaller takes
+// them back to where their text went, not to where it was.
+func TestSelectSmallerAfterEdit(t *testing.T) {
+	// Typed over the word selected: the caret is after the letter, not
+	// between its bytes, where the next letter typed would break it.
+	ct := newEditorTest(t, "", "a|b cd")
+	ct.run(SelectLarger)
+	ct.want("[ab] cd")
+	ct.typ("é")
+	ct.run(SelectSmaller)
+	ct.want("é| cd")
+	ct.typ("z")
+	ct.want("éz| cd")
+	// The text is shorter than the caret was far.
+	ct = newEditorTest(t, "", "abc|def")
+	ct.run(SelectLarger)
+	ct.want("[abcdef]")
+	ct.typ("x")
+	ct.run(SelectSmaller)
+	ct.want("x|")
+	// An edit of the app's before the selection.
+	ct = newEditorTest(t, "", "one two thr|ee")
+	ct.run(SelectLarger)
+	ct.want("one two [three]")
+	ct.st.Buffer.Edit(Edit{Start: 0, End: 4})
+	ct.run(SelectSmaller)
+	ct.want("two thr|ee")
+}
+
+// TestDragFollowsEdits checks that a drag goes on from where its start
+// went with the text edited since the press, as under a reply that
+// streams in, and that the carets an Alt drag keeps go with it too.
+func TestDragFollowsEdits(t *testing.T) {
+	ct := newEditorTest(t, "", "aé\nxyz")
+	ct.tt.Press(300, 5) // past the end of the first line
+	ct.want("aé|\nxyz")
+	ct.st.Buffer.Edit(Edit{Start: 0, End: 1})
+	ct.tt.Move(0, 5)
+	ct.want("[é]\nxyz")
+	ct.tt.Release(0, 5)
+
+	ct = newEditorTest(t, "", "aé|\nxyz")
+	y := 5 + ct.st.ed.view.lineHeight
+	// The editor takes these itself: a Tester's press holds no modifier.
+	ct.st.ed.input(ui.InputEvent{Kind: ui.InputPointerDown, X: 300, Y: y, Clicks: 1, Mods: ui.Alt})
+	ct.want("aé|\nxyz|")
+	ct.st.Buffer.Edit(Edit{Start: 0, End: 1})
+	ct.st.ed.input(ui.InputEvent{Kind: ui.InputPointerMove, Y: y, Mods: ui.Alt})
+	ct.want("é|\n[xyz]")
 }
 
 func TestCodeEditorWords(t *testing.T) {
@@ -1057,6 +1175,47 @@ func TestCodeEditorTokenFaces(t *testing.T) {
 	check(v, l)
 }
 
+// Finding a match left of the view shows the whole of it, not its end at
+// the left edge: the caret alone, at a match's end, would hide the start.
+func TestFindRevealsTheWholeMatchSideways(t *testing.T) {
+	long := strings.Repeat("x", 300) + " closeDate " + strings.Repeat("y", 300)
+	text := long + "\n" + "needle closeDate tail\n"
+	for _, fit := range []bool{false, true} {
+		st := &State{Buffer: NewBuffer(text), FitContent: fit}
+		tt := ui.NewTester(func(c *ui.Context) {
+			if fit {
+				ui.Scroll(c).Fill().Children(func() { View(c, st).Shrink(0) })
+				return
+			}
+			View(c, st).Fill()
+		}, 600, 400)
+		tt.Frame()
+		ed := &st.ed
+		// The user scrolled right, into the long first line.
+		ed.scrollX = 4000
+		tt.Frame()
+		tt.Frame()
+		st.Find("closeDate")
+		tt.Frame()
+		tt.Frame()
+		i := strings.Index(text, "closeDate")
+		r, ok := ed.caretRect(i)
+		if !ok {
+			t.Fatalf("FitContent %v: the match has no rectangle", fit)
+		}
+		if r.X < ed.scrollX {
+			t.Fatalf("FitContent %v: the match starts at %v, left of the view from %v", fit, r.X, ed.scrollX)
+		}
+		end, ok := ed.caretRect(i + len("closeDate"))
+		if !ok {
+			t.Fatalf("FitContent %v: the match's end has no rectangle", fit)
+		}
+		if end.X > ed.scrollX+ed.r.W-ed.textX {
+			t.Fatalf("FitContent %v: the match ends at %v, right of the view from %v wide", fit, end.X, ed.r.W)
+		}
+	}
+}
+
 // An editor as high as its lines, in a scroll view, shows its caret as it
 // takes the focus, not its first line.
 func TestFitContentFocusRevealsCaret(t *testing.T) {
@@ -1113,5 +1272,41 @@ func TestHeightsZeroValue(t *testing.T) {
 	}
 	if got := h.lineAt(10); got != 0 {
 		t.Fatalf("lineAt of the zero heights = %d, want 0", got)
+	}
+}
+
+// A caret alone cuts its line even when it is the last, which has no newline
+// of its own: the line goes, and the caret lands at the end of the one above.
+func TestCodeEditorCutLastLine(t *testing.T) {
+	ct := newEditorTest(t, "", "one\ntw|o")
+	ct.key(ui.Cmd, ui.KeyX)
+	ct.want("one|")
+	if got := ct.tt.Clipboard(); got != "two\n" {
+		t.Errorf("cut %q", got)
+	}
+	// An empty last line goes too, rather than cutting nothing.
+	ct = newEditorTest(t, "", "one\n|")
+	ct.key(ui.Cmd, ui.KeyX)
+	ct.want("one|")
+	// The only line is emptied, with nothing above to take.
+	ct = newEditorTest(t, "", "o|ne")
+	ct.key(ui.Cmd, ui.KeyX)
+	ct.want("|")
+	// A line in the middle still takes its own newline.
+	ct = newEditorTest(t, "", "one\nt|wo\nthree")
+	ct.key(ui.Cmd, ui.KeyX)
+	ct.want("one\n|three")
+}
+
+// Comment toggling on blank lines has nothing to uncomment, so it comments.
+func TestCodeEditorToggleCommentBlankLine(t *testing.T) {
+	ct := newEditorTest(t, "sql", "select 1;\n|")
+	ct.key(ui.Cmd, ui.KeySlash)
+	if got := ct.st.Buffer.String(); got != "select 1;\n-- " {
+		t.Fatalf("a blank line gave %q", got)
+	}
+	ct.key(ui.Cmd, ui.KeySlash)
+	if got := ct.st.Buffer.String(); got != "select 1;\n" {
+		t.Errorf("toggled back to %q", got)
 	}
 }

@@ -65,7 +65,8 @@ const (
 	// macOS, Linux on Wayland and browsers report pinches; Windows reports
 	// them as scrolling with Ctrl held, so there a touchpad's scrolling
 	// with Ctrl held comes as InputZoom too, and a mouse wheel's notches
-	// as InputScroll with Ctrl in Mods.
+	// as InputScroll with Ctrl in Mods. One the element leaves goes to the
+	// handlers around it, as InputScroll does.
 	InputZoom
 )
 
@@ -120,8 +121,9 @@ type InputEvent struct {
 	DX, DY   float32
 	Precise  bool
 	Momentum bool
-	// Scale is what InputZoom zooms by.
-	Scale float32
+	// Scale is what InputZoom zooms by, and Rotation the radians clockwise
+	// two fingers turned, on touch screens.
+	Scale, Rotation float32
 	// Start and End are the runes InputSelect selects.
 	Start, End int
 	// Time is when the event came, by the clock of the window's frames

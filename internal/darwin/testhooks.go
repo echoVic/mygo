@@ -1,4 +1,4 @@
-//go:build darwin
+//go:build darwin && !ios
 
 package darwin
 
@@ -111,6 +111,34 @@ func TestOnScreen(handle uintptr) bool {
 	return sendInt(id(handle), "occlusionState")&occlusionStateVisible != 0
 }
 
+// TestOrderedIn reports whether a window is ordered in, as AppKit has it
+// at once, before the window server shows it (TestOnScreen).
+func TestOrderedIn(handle uintptr) bool {
+	return sendBool(id(handle), "isVisible")
+}
+
+// TestMetalDrawableSize returns the size of the drawables of the
+// CAMetalLayer the GPU renderer draws a window's surface into, a pixel
+// while it gave them back, and whether it has one.
+func TestMetalDrawableSize(handle uintptr) (width, height float64, ok bool) {
+	w := theBackend.byNSWindow[id(handle)]
+	if w == nil || w.surface == nil {
+		return 0, 0, false
+	}
+	l := w.surface.metalLayer()
+	if l == 0 {
+		return 0, 0, false
+	}
+	s := msgSize(l, sel("drawableSize"))
+	return s.Width, s.Height, true
+}
+
+// TestPerformClose closes a window as its close button does, which asks
+// the delegate first (performClose:).
+func TestPerformClose(handle uintptr) {
+	send(id(handle), "performClose:", 0)
+}
+
 // TestWindowOrder returns the app's windows on screen, panels too, front
 // to back.
 func TestWindowOrder() []uintptr {
@@ -189,6 +217,20 @@ func TestAppPress(handle uintptr, x, y float64, down bool) {
 // bar's items too. It reports false where the process may not post events
 // (Accessibility).
 func TestPostMouse(x, y float64, down bool) bool {
+	typ := uint32(2) // kCGEventLeftMouseUp
+	if down {
+		typ = 1 // kCGEventLeftMouseDown
+	}
+	return postMouse(x, y, typ)
+}
+
+// TestPostMouseMove moves the pointer to (x, y) on screen, as
+// TestPostMouse presses.
+func TestPostMouseMove(x, y float64) bool {
+	return postMouse(x, y, 5) // kCGEventMouseMoved
+}
+
+func postMouse(x, y float64, typ uint32) bool {
 	testPostOnce.Do(func() {
 		purego.RegisterLibFunc(&cgPreflightPostEventAccess, libCG, "CGPreflightPostEventAccess")
 		purego.RegisterLibFunc(&cgEventCreateMouseEvent, libCG, "CGEventCreateMouseEvent")
@@ -196,10 +238,6 @@ func TestPostMouse(x, y float64, down bool) bool {
 	})
 	if !cgPreflightPostEventAccess() {
 		return false
-	}
-	typ := uint32(2) // kCGEventLeftMouseUp
-	if down {
-		typ = 1 // kCGEventLeftMouseDown
 	}
 	ev := cgEventCreateMouseEvent(0, typ, NSPoint{x, y}, 0) // kCGMouseButtonLeft
 	if ev == 0 {
@@ -637,6 +675,20 @@ func TestPopoverAppearance(handle uintptr) (chrome, window, content string) {
 	return name(w.popover, "appearance"), name(w.win, "effectiveAppearance"), name(w.view, "effectiveAppearance")
 }
 
+// TestPopover returns the NSPopover a popover flyout shows in, 0 for none.
+func TestPopover(handle uintptr) uintptr {
+	if w := theBackend.byNSWindow[id(handle)]; w != nil {
+		return uintptr(w.popover)
+	}
+	return 0
+}
+
+// TestPopoverClosing reports whether a closed flyout gave the NSPopover
+// back while it was still closing, and it has not finished (givePopover).
+func TestPopoverClosing(popover uintptr) bool {
+	return theBackend.closingPopovers[id(popover)]
+}
+
 // TestSetPopoverAnchorAppearance models a status item's contrast appearance,
 // which can differ from the application's own theme over desktop wallpaper.
 func TestSetPopoverAnchorAppearance(handle uintptr, dark bool) {
@@ -787,6 +839,11 @@ func TestIsFrontmost() bool {
 // TestCollectionBehavior returns a window's NSWindowCollectionBehavior.
 func TestCollectionBehavior(handle uintptr) uint {
 	return uint(sendInt(id(handle), "collectionBehavior"))
+}
+
+// TestBecomesKeyOnlyIfNeeded reports an NSPanel's becomesKeyOnlyIfNeeded.
+func TestBecomesKeyOnlyIfNeeded(handle uintptr) bool {
+	return sendBool(id(handle), "becomesKeyOnlyIfNeeded")
 }
 
 // TestMaterial returns the class of a window's material (Vibrancy), its
@@ -1244,16 +1301,28 @@ func TestComposeOver(handle uintptr, text string, caret int, commit bool, from, 
 // Japanese one commits the candidate and asks for nothing. It reports
 // false for a window showing a web page.
 func TestKeyComposing(handle uintptr, code uint16, chars, commit, command string) bool {
+	return TestKeyComposingOver(handle, code, chars, commit, command, -1, 0)
+}
+
+// TestKeyComposingOver is TestKeyComposing with commit replacing the
+// length UTF-16 units of the input method's document at from, unless from
+// is negative, as the Korean input method takes a jamo back with
+// Backspace: it inserts 하 over the 한 before the caret.
+func TestKeyComposingOver(handle uintptr, code uint16, chars, commit, command string, from, length int) bool {
 	w := theBackend.byNSWindow[id(handle)]
 	if w == nil || w.surface == nil {
 		return false
 	}
 	loadTestInput()
+	replace := nsRange{Location: nsNotFound}
+	if from >= 0 {
+		replace = nsRange{Location: uint(from), Length: uint(length)}
+	}
 	interpret := interpretKeys
 	defer func() { interpretKeys = interpret }()
 	interpretKeys = func(view, ev id) {
 		if commit != "" {
-			msgInsertText(view, sel("insertText:replacementRange:"), nsString(commit), nsRange{Location: nsNotFound})
+			msgInsertText(view, sel("insertText:replacementRange:"), nsString(commit), replace)
 		}
 		if command != "" {
 			send(view, "doCommandBySelector:", uintptr(sel(command)))
@@ -1299,6 +1368,13 @@ var (
 // the surface took the files over that point and whether it took the
 // drop.
 func TestDropFiles(handle uintptr, x, y float64, paths []string) (over, dropped bool) {
+	return TestDropFilesFrom(handle, x, y, x, y, paths)
+}
+
+// TestDropFilesFrom is TestDropFiles for a drag that came in over (overX,
+// overY) and was let go at (x, y), as a drag over a page and dropped
+// beside it, on the content.
+func TestDropFilesFrom(handle uintptr, overX, overY, x, y float64, paths []string) (over, dropped bool) {
 	w := theBackend.byNSWindow[id(handle)]
 	if w == nil || w.surface == nil {
 		return false, false
@@ -1308,6 +1384,24 @@ func TestDropFiles(handle uintptr, x, y float64, paths []string) (over, dropped 
 			method("draggingLocation", func(self id, _ objc.SEL) NSPoint { return testDragAt }),
 			method("draggingPasteboard", func(self id, _ objc.SEL) id { return testDragPB }),
 			method("draggingSourceOperationMask", func(self id, _ objc.SEL) uint { return testDragMask }),
+			// A drag to a page goes on to WebKit, which asks the rest of
+			// NSDraggingInfo (applicationFlagsForDrag): a drag of neither
+			// its pages nor its web views is another application's.
+			method("draggingSource", func(self id, _ objc.SEL) id { return 0 }),
+			method("draggingSequenceNumber", func(self id, _ objc.SEL) int { return 0 }),
+			method("draggingFormation", func(self id, _ objc.SEL) int { return 0 }),
+			method("setDraggingFormation:", func(self id, _ objc.SEL, n int) {}),
+			method("animatesToDestination", func(self id, _ objc.SEL) bool { return false }),
+			method("setAnimatesToDestination:", func(self id, _ objc.SEL, b bool) {}),
+			method("numberOfValidItemsForDrop", func(self id, _ objc.SEL) int { return 1 }),
+			method("setNumberOfValidItemsForDrop:", func(self id, _ objc.SEL, n int) {}),
+			method("springLoadingHighlight", func(self id, _ objc.SEL) int { return 0 }),
+			method("draggingImageComponents", func(self id, _ objc.SEL) id { return 0 }),
+			// WebKit asks this from draggingEntered:
+			// (_promisedFileMIMETypes:, on newer systems), and a
+			// dragging info without it aborts the test process.
+			method("enumerateDraggingItemsWithOptions:forView:classes:searchOptions:usingBlock:",
+				func(self id, _ objc.SEL, options uint, view, classes, search id, block uintptr) {}),
 		})
 		testDragInfo = send(send(class("MyGoTestDraggingInfo"), "alloc"), "init")
 		testDragPB = retain(send(class("NSPasteboard"), "pasteboardWithUniqueName"))
@@ -1327,7 +1421,9 @@ func TestDropFiles(handle uintptr, x, y float64, paths []string) (over, dropped 
 		}
 		send(testDragPB, "writeObjects:", uintptr(nsArray(urls...)))
 		v := w.surface.view
+		testDragAt = NSPoint{overX, content.Size.Height - overY}
 		over = send(v, "draggingEntered:", uintptr(testDragInfo)) != 0
+		testDragAt = NSPoint{x, content.Size.Height - y}
 		over = send(v, "draggingUpdated:", uintptr(testDragInfo)) != 0 && over
 		if !over {
 			send(v, "draggingExited:", uintptr(testDragInfo))

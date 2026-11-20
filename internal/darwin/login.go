@@ -1,4 +1,4 @@
-//go:build darwin
+//go:build darwin && !ios
 
 package darwin
 
@@ -92,7 +92,7 @@ func (a appController) OpenAtLogin(appID, name, arg string) bool {
 }
 
 // OpenedAtLogin reports whether the launch Apple Event said the app was
-// started as a login item, recorded in applicationWillFinishLaunching:.
+// started as a login item, recorded in applicationDidFinishLaunching:.
 func (a appController) OpenedAtLogin() bool { return a.b.openedAtLogin }
 
 // launchedAsLoginItem reports whether the Apple Event being handled, the

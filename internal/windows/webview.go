@@ -4,6 +4,7 @@ package windows
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -136,7 +137,9 @@ func (w *window) createWebView() {
 	if fail {
 		testFailWebViews--
 	}
+	w.creating = true
 	hr := withHandler(func(hr, controller uintptr) {
+		w.creating = false
 		// A web view in a window of native UI gets a composition
 		// controller, whose controller closes it.
 		closeController := func() {
@@ -172,6 +175,7 @@ func (w *window) createWebView() {
 		return w.b.createController(storeOf(w.opts.DataStore), w.hwnd, false, h)
 	})
 	if failed(hr) {
+		w.creating = false // no answer comes
 		w.creationFailed(hr)
 	}
 }
@@ -191,6 +195,15 @@ func (w *window) creationFailed(hr uintptr) {
 		hwnd = w.host.surface.hwnd // which asks again for its web views
 	}
 	procSetTimer.Call(hwnd, timerWebView, uintptr(backoff(w.webViewFails-1)/time.Millisecond), 0)
+}
+
+// asksAgain reports whether the timer of a surface, which asks again for
+// each of its web views, is to ask for w's: one without a controller that
+// has not failed for good, unless WebView2 has yet to answer about it, as
+// a web view made after another's creation failed. Asked for twice, it
+// got two controllers, the first never closed.
+func (w *window) asksAgain() bool {
+	return w.controller == 0 && w.webViewErr == nil && !w.creating
 }
 
 func (w *window) setUp(controller uintptr) {
@@ -214,7 +227,10 @@ func (w *window) setUp(controller uintptr) {
 		release(s3)
 	}
 	comCall(s, setPutAreDefaultContextMenusEnabled, 1)
-	comCall(s, setPutIsZoomControlEnabled, 1)
+	// Ctrl+wheel zooms the page, and so do Ctrl+Plus and Ctrl+Minus
+	// where the browser's keys are on, only if it asks: WKWebView and
+	// WebKitGTK have no such zoom. SetZoom zooms either way.
+	comCall(s, setPutIsZoomControlEnabled, boolArg(o.ZoomControl))
 	// WebView2 has a touchscreen's pinch zoom and swipe navigation on:
 	// they are off unless the page asks, as in WKWebView.
 	if s5 := queryInterface(s, &iidICoreWebView2Settings5); s5 != 0 {
@@ -281,6 +297,11 @@ func (w *window) setUp(controller uintptr) {
 		}
 	}
 	add(wvAddWindowCloseRequested, func(_, _ uintptr) { w.h.ClosedByPage() })
+	// An element the page makes full screen covers only the web view, so
+	// the window showing it goes full screen too, as WKWebView makes macOS
+	// do; the page leaving its full screen (Escape, exitFullscreen) takes
+	// the window out again (pageFullScreenChanged).
+	add(wvAddContainsFullScreenElementChanged, func(_, _ uintptr) { w.pageFullScreenChanged() })
 	add(wvAddProcessFailed, func(_, args uintptr) {
 		var kind int32
 		comCall(args, procFailedGetKind, uintptr(unsafe.Pointer(&kind)))
@@ -301,6 +322,12 @@ func (w *window) setUp(controller uintptr) {
 	w.filterAllRequests()
 	withHandler(w.acceleratorKeyPressed, func(h uintptr) uintptr {
 		return comCall(controller, ctlAddAcceleratorKeyPressed, h, uintptr(unsafe.Pointer(&tok)))
+	})
+	// Zoom reports the user's zoom too, and WebView2's own, which keeps
+	// one per site, as the page navigates. It runs for no put_ZoomFactor,
+	// so not for SetZoom's.
+	withHandler(func(_, _ uintptr) { w.zoomFactorChanged() }, func(h uintptr) uintptr {
+		return comCall(controller, ctlAddZoomFactorChanged, h, uintptr(unsafe.Pointer(&tok)))
 	})
 
 	if w.host != nil {
@@ -347,8 +374,27 @@ func (w *window) becomeReady() {
 	}
 }
 
+// addFilter makes WebView2 raise WebResourceRequested for the requests
+// whose URL matches pattern, of every resource context, from the page's
+// frames, those of other origins among them (#1912): an iframe of a custom
+// scheme's other host loads its scripts, styles and fetches through the
+// scheme. Runtimes without ICoreWebView2_22 only have the older filter,
+// which reaches the main frame and its same-origin iframes alone.
+//
+// Service and shared workers are left out, as with the older filter: their
+// requests reach every web view of the profile that filters them, so each
+// window would answer them, and apply its content rules to them.
 func (w *window) addFilter(pattern string) {
-	comCall(w.webview, wvAddWebResourceRequestedFilter, uintptr(unsafe.Pointer(u16(pattern))), 0) // COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL
+	const contextAll = 0 // COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL
+	uri := u16(pattern)
+	if wv22 := queryInterface(w.webview, &iidICoreWebView2_22); wv22 != 0 {
+		hr := comCall(wv22, wv22AddWebResourceRequestedFilterWithRequestSourceKinds, uintptr(unsafe.Pointer(uri)), contextAll, requestSourceDocument)
+		release(wv22)
+		if !failed(hr) {
+			return
+		}
+	}
+	comCall(w.webview, wvAddWebResourceRequestedFilter, uintptr(unsafe.Pointer(uri)), contextAll)
 }
 
 func (w *window) resizeWebView() {
@@ -363,6 +409,39 @@ func (w *window) resizeWebView() {
 func (w *window) focusWebView() {
 	if w.controller != 0 {
 		comCall(w.controller, ctlMoveFocus, 0) // COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC
+	}
+}
+
+// pageFullScreenChanged takes the page's own full screen (an element
+// fullscreened by requestFullscreen, a video's button among them) to the
+// window showing the web view: to its own, or to its host's, for a web
+// view in native UI, which is the window whose whole client area the page
+// should then cover, as WKWebView promotes its window on macOS. The page
+// leaving its full screen takes the window out, unless the app had asked
+// for that full screen itself (setFullScreen).
+func (w *window) pageFullScreenChanged() {
+	if w.closed || w.webview == 0 {
+		return
+	}
+	var on int32
+	comCall(w.webview, wvGetContainsFullScreenElement, uintptr(unsafe.Pointer(&on)))
+	w.pageFull = on != 0
+	toplevel := w
+	for toplevel.host != nil {
+		toplevel = toplevel.host
+	}
+	toplevel.setFullScreen(w.pageFull, false)
+}
+
+// leavePageFullScreen takes the window's page and the pages shown in its
+// surface out of their own full screens: a window coming out of full
+// screen leaves the page's element out of it too, as WebKit's windows do
+// on macOS.
+func (w *window) leavePageFullScreen() {
+	for _, v := range append([]*window{w}, w.webViews...) {
+		if v.pageFull && !v.closed && v.webview != 0 {
+			v.Eval("if (document.fullscreenElement) document.exitFullscreen().catch(function () {});")
+		}
 	}
 }
 
@@ -424,8 +503,8 @@ func (w *window) navigationCompleted(_, args uintptr) {
 			comCall(w.webview, wvReload)
 			return
 		}
-		if zoomByScript && w.zoom != 1 {
-			putZoom(w, w.zoom) // a new document starts unzoomed
+		if zoomByScript && w.zoom != cmp.Or(w.userZoom, 1) {
+			putZoom(w, w.zoom) // a new document starts without CSS zoom
 		}
 		w.h.LoadFinished()
 		return
@@ -909,6 +988,14 @@ func (w *window) SetZoom(f float64) {
 }
 
 func (w *window) Zoom() float64 { return w.zoom }
+
+// zoomFactorChanged follows a zoom the user chose, which the controller's
+// ZoomFactorChanged tells of.
+func (w *window) zoomFactorChanged() {
+	if w.userZoomed() {
+		w.h.ZoomChanged()
+	}
+}
 
 // setUpUserAgent applies UserAgent and UserAgentSuffix, which appends to
 // WebView2's own user agent when it is all that is set.
