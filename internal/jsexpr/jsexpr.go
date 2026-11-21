@@ -8,11 +8,23 @@ package jsexpr
 import "strings"
 
 // The forms of Page.Eval, fmt formats of code (%s) run as the body of an
-// async function: as an expression, which it tries first (a compile error
-// means code is not one), and as a function body.
+// async function.
 const (
-	ExprForm = "try{return JSON.stringify({ok:true,v:await(\n%s\n)})}catch(e){return JSON.stringify({ok:false,e:String(e&&e.message||e)})}"
-	BodyForm = "try{return JSON.stringify({ok:true,v:await(async()=>{\n%s\n})()})}catch(e){return JSON.stringify({ok:false,e:String(e&&e.message||e)})}"
+	// evalStart and evalEnd run code as an async arrow function, out of
+	// reach of the wrapper's own names, and answer with its result as JSON.
+	// A document that goes away never settles what it was waiting for, and
+	// WebKit answers for its promise only once the garbage collector takes
+	// it, which never happens while the page keeps it, as the back-forward
+	// cache keeps pages whole. So until the code answers, the page's
+	// pagehide answers that it was left. Listening is best effort: a page
+	// that replaced addEventListener or removeEventListener still gets its
+	// answers, as before.
+	evalStart = "return(async p=>{let h;try{return JSON.stringify({ok:true,v:await new Promise((ok,no)=>{try{addEventListener('pagehide',h=()=>no(h),true)}catch{}p.then(ok,no)})})}catch(e){return JSON.stringify(e===h?{left:true}:{ok:false,e:String(e&&e.message||e)})}finally{try{removeEventListener('pagehide',h,true)}catch{}}})((async()=>"
+	evalEnd   = ")())"
+	// ExprForm runs code as an expression. A compile error means code is not one.
+	ExprForm = evalStart + "(\n%s\n)" + evalEnd
+	// BodyForm runs code as a function body.
+	BodyForm = evalStart + "{\n%s\n}" + evalEnd
 )
 
 // Expr returns code as Page.Eval puts it in ExprForm: without the spaces

@@ -126,7 +126,25 @@ class SurfaceWindow(context: Context, id: Long) : HostWindow(context, id) {
     private class Held(val window: HostWindow, val clip: android.widget.FrameLayout) {
         var box = Rect()
         var covers = emptyList<Rect>()
+        private var shown: Boolean? = null
         fun takes(x: Int, y: Int) = clip.visibility == View.VISIBLE && box.contains(x, y) && covers.none { it.contains(x, y) }
+
+        /**
+         * Shows the view or hides it, and pauses a web view while it is
+         * hidden, unless its page asked not to be throttled. Hiding the clip
+         * is not enough for one: its own visibility stays VISIBLE, the only
+         * one Chromium reads, so its page would stay visible and go on
+         * drawing frames, on the renderer thread the web views of an app
+         * share.
+         */
+        fun show(on: Boolean) {
+            if (shown == on) return
+            shown = on
+            clip.visibility = if (on) View.VISIBLE else View.GONE
+            val w = window as? WebWindow ?: return
+            if (!w.throttles) return
+            if (on) w.web.onResume() else w.web.onPause()
+        }
     }
 
     private val held = ArrayList<Held>()
@@ -141,7 +159,6 @@ class SurfaceWindow(context: Context, id: Long) : HostWindow(context, id) {
         (w.view.parent as? android.view.ViewGroup)?.removeView(w.view)
         val clip = android.widget.FrameLayout(context)
         clip.clipChildren = true
-        clip.visibility = View.GONE
         clip.addView(w.view, android.widget.FrameLayout.LayoutParams(0, 0))
         box.addView(clip, 0, android.widget.FrameLayout.LayoutParams(0, 0))
         if (held.isEmpty()) {
@@ -154,7 +171,7 @@ class SurfaceWindow(context: Context, id: Long) : HostWindow(context, id) {
                 box.addView(surface, android.widget.FrameLayout.LayoutParams(android.widget.FrameLayout.LayoutParams.MATCH_PARENT, android.widget.FrameLayout.LayoutParams.MATCH_PARENT))
             }
         }
-        held.add(Held(w, clip))
+        held.add(Held(w, clip).apply { show(false) })
     }
 
     fun release(w: HostWindow) {
@@ -197,7 +214,7 @@ class SurfaceWindow(context: Context, id: Long) : HostWindow(context, id) {
             h.window.view.post { h.window.reportSize() }
             h.box = clip
             h.covers = covers
-            h.clip.visibility = View.VISIBLE
+            h.show(true)
             if (box.indexOfChild(h.clip) != order) {
                 box.removeView(h.clip)
                 box.addView(h.clip, order)
@@ -205,7 +222,7 @@ class SurfaceWindow(context: Context, id: Long) : HostWindow(context, id) {
             order++
             shown.add(h)
         }
-        for (h in held) if (h !in shown) h.clip.visibility = View.GONE
+        for (h in held) if (h !in shown) h.show(false)
     }
 
     /** A finger going down on a view it holds, which gets it: the content hears of it. */
