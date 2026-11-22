@@ -438,8 +438,8 @@ by `mygo build` with `mygo_noinspector`) leave out its downloader and
   Wayland has no positions they would shift. A window with `DisableShadow`,
   a transparent one (the decorations would outline the rectangle around a
   page that shows its own shape; GTK draws them on an app-paintable window
-  too), panels and flyouts, a hidden title bar on a compositor that
-  decorates windows itself, and every window on X11 stay undecorated
+  too), panels and flyouts, a hidden title bar on a tiling compositor
+  that decorates windows itself, and every window on X11 stay undecorated
   (`gtk_window_set_decorated`): an X11 window that decorates itself has
   its shadow inside its X window, which the frame extents that `Bounds`
   counts do not tell, and Mutter puts its own shadow around opaque
@@ -457,8 +457,9 @@ by `mygo build` with `mygo_noinspector`) leave out its downloader and
   compositor that speaks `org_kde_kwin_server_decoration` (KWin, COSMIC,
   Sway) for every window GTK does not decorate itself, one without
   decorations too, and the compositor draws its title bar on it. A
-  frameless window GTK does not decorate itself is realized before it
-  shows and announced client-side
+  frameless window GTK does not decorate itself, and one with a hidden
+  title bar outside a tiling compositor, is realized before it shows and
+  announced client-side
   instead (`gdk_wayland_window_announce_csd`, looked up at startup): GDK
   keeps that for the `GdkWindow` and requests it again whenever the window
   maps or the compositor answers with another mode, so the window gets no
@@ -475,13 +476,17 @@ by `mygo build` with `mygo_noinspector`) leave out its downloader and
   toggle maximized, close. The bars are measured before the web view
   exists, from their natural size, for the script that tells the first
   page, then from their allocations; a change of the layout setting
-  rebuilds them. A Wayland compositor that decorates windows itself
+  rebuilds them. A tiling Wayland compositor that decorates windows itself
   (`gdk_wayland_display_prefers_ssd`: the default mode of
-  `org_kde_kwin_server_decoration_manager`, server on KWin, Hyprland and
-  Sway) gets no bars: such a window keeps GTK's announcement of server-side
-  decorations, unlike a frameless one, so the compositor's title bar, or a
-  tiling compositor's lack of one, stands for the buttons, whatever the
-  layout says.
+  `org_kde_kwin_server_decoration_manager`, server on Hyprland and Sway)
+  gets no bars: such a window keeps GTK's announcement of server-side
+  decorations, unlike a frameless one, so the compositor's lack of a title
+  bar stands for the buttons, whatever the layout says. KWin's default
+  mode is server too, but it draws title bars, and KDE keeps
+  `gtk-decoration-layout` in step with KWin's buttons: on KWin, which alone
+  offers `org_kde_kwin_server_decoration_palette_manager`
+  (`gdk_wayland_display_query_registry`), the window decorates itself and has the bars, as
+  on GNOME, instead of KWin's title bar over its page.
 - The app's GTK style sheet (`Theme.SetGTKCSS`, `style.go`) is a
   `GtkCssProvider` of its own for the default screen, at
   `GTK_STYLE_PROVIDER_PRIORITY_USER`: GTK 3 looks providers up from the
@@ -678,6 +683,13 @@ features GTK 4 lacks become X11-only code beside it.
   with a base URL serves the document from that URL the same way.
 - **Eval** goes through the DevTools protocol (`Runtime.evaluate` with
   `awaitPromise`), which reports syntax errors and ignores the page's CSP.
+  A method that fails gives its caller the HRESULT and the protocol's
+  answer, whose message Eval's and `PrintToPDF`'s errors carry
+  (`devtoolsFailure`, which only they link: the default menus' Paste
+  calls the protocol in every app). An evaluation whose document went
+  away fails with code -32000, "Inspected target navigated or closed",
+  before the next document commits, which the backend reports as
+  `platform.ErrNavigated` (see "Eval").
   Edit roles run `document.execCommand` with a user gesture, except Paste:
   `Input.dispatchKeyEvent` carries Chromium's `paste` command on an
   `Unidentified` raw key-down, followed by key-up once it completes. The
@@ -1123,10 +1135,13 @@ fake host. Desktop files of `darwin` and `linux` exclude `ios` and
   renderer fetches a drawable draws once it has it (`FrameNow`), rather
   than Go's main thread waiting for it, and the fingers with it. On
   Android, a frame asked for crosses to the UI thread before Choreographer
-  asks for the next refresh: while the view animates (a fling, a glide),
-  each frame asks for the next as it starts (`platform.FrameAheadSurface`,
-  `engine.frameAhead`), not once presented, so a frame taking most of a
-  refresh does not halve the rate; the surface's `pending` and the host's
+  asks for the next refresh: while the view animates, each frame asks for
+  the next as soon as it knows it moves (`platform.FrameAheadSurface`,
+  `engine.frameAhead`): as it starts for a fling or a glide, as the view
+  calls `Context.AnimationFrame`, once the build is done for what else it
+  started moving, and before it presents; once a frame, never once
+  presented, so a frame taking most of a refresh does not halve the rate
+  (#2131); the surface's `pending` and the host's
   `framePending` coalesce the request the frame's end makes. The host asks
   the display for its fastest mode (`Surface.setFrameRate`, always rather
   than only where seamless from Android 12), tells Go the active mode's rate
@@ -1163,8 +1178,14 @@ fake host. Desktop files of `darwin` and `linux` exclude `ios` and
   desktops. iOS gives the holder a `-1` z position, under the renderer's layer;
   Android's `SurfaceView` goes over the window (`setZOrderOnTop`, made again the
   first time, off the call that asked: the surface going waits for Go, which
-  waits for the call). The hosts route fingers by the placements' boxes
-  themselves, without asking Go.
+  waits for the call). Android pauses a web view the content doesn't show
+  (`WebView.onPause`) and resumes it when it shows again: under a clip that is
+  gone its own visibility stays visible, the only one Chromium reads, so its
+  page would stay visible and go on drawing frames, on the renderer thread an
+  app's web views share. A paused page's scripts still run, with a hidden
+  page's timers, and its sound plays on. A page with `ThrottlingOff` isn't
+  paused. The hosts route fingers by the placements' boxes themselves,
+  without asking Go.
 - **The background.** `Background` is waited for: on iOS the GPU is off limits
   once `sceneDidEnterBackground` returns, and iOS ends what uses it. `frame`
   draws nothing in the background, and asks again on the way back.
@@ -1494,9 +1515,10 @@ script that does not compile answers null, the only thing taken as a compile
 error there: it reads "SyntaxError: the script does not compile", without
 V8's message or the position, which `evaluateJavascript` does not return,
 and an error the page reports itself never starts with `SyntaxError`. The
-code is first wrapped as `return JSON.stringify({ok, v: await (code)})`;
-if that fails to compile the code is not an expression, and it is run again as
-a function body. A compile error means nothing executed, so code never runs
+code is first wrapped as an async arrow function returning `(code)`, whose
+result goes back as `JSON.stringify({ok, v})`; if that fails to compile the
+code is not an expression, and it is run again as the arrow's body. A
+compile error means nothing executed, so code never runs
 twice. The result travels as a JSON string and is decoded in Go. A page whose
 window closed never answers, so a window closing fails the evals waiting for
 it, and an eval with the quit under way fails at once. WebKit runs the
@@ -1505,6 +1527,23 @@ that runs in a page just as a navigation away commits can leave its
 continuation, which answers, queued: the bridge listens to `pagehide`, so
 that it runs before WebKit freezes the page in its back/forward cache,
 where it would wait until Back shows the page again.
+
+A document that goes away never settles what it was waiting for, and WebKit
+answers for its promise only once the garbage collector takes it
+("Completion handler for function call is no longer reachable"), which
+never happens while the page keeps it, as the back-forward cache keeps a
+page whole. So until the code answers, the wrapper listens for the page's
+`pagehide`, which answers `{left: true}`, and Eval returns "the page
+navigated away". In the same process the old document hears `pagehide`
+before the next one commits, so its answer reaches the app before the
+commit, on the same connection. To another site WebKit swaps the web
+process, and the old one puts its page away after the new one commits;
+its answer comes later, which a core failing evals at the commit would
+drop. An eval that reaches the next document runs there, and `pushState`
+and fragments fire no `pagehide`, so only the evals of the document left
+fail. WebView2 fails such an evaluation itself before the next document
+commits, which can come before the page's answer; the backend reports
+that as `platform.ErrNavigated`, the error Eval returns either way.
 
 ### Trust
 
@@ -4681,7 +4720,10 @@ either.
   source offsets, to copy text with block separators, Markdown, and the
   HTML of that Markdown parsed again, which `ui/richtext` pastes with its
   formatting, as it reads Markdown with the same parser
-  (`ParseMarkdown`). Links open in the system only when `ui.SafeToOpen`
+  (`ParseMarkdown`). `HTML` escapes the raw tags a browser reads to their
+  end, which is cmark-gfm's tagfilter (`ExtTagFilter`, in `GFM` and so in
+  `Default`), so that what an app copies as HTML carries no `<script>`
+  into what pastes it. Links open in the system only when `ui.SafeToOpen`
   allows them, in both. Tasks' check boxes are boxes of `RoleCheckBox`,
   read-only, or, with `Options.OnTask`, focusable and named by the plain
   text of their item's first paragraph, kept by block while its start,
@@ -7309,8 +7351,9 @@ which npm allows only for packages that exist: the first release uses an
    need: main-thread only, synchronous, or with a callback that runs on the
    main thread exactly once.
 3. **Implement it in every backend**: `darwin`, `linux`, `windows`, `web`,
-   `fake` and `unsupported` (return `platform.ErrUnsupported` or a zero
-   value).
+   `fake` and `unsupported` (return `platform.ErrUnsupported`, or
+   `platform.Unsupported(message)` to say it in the backend's own words, or
+   a zero value).
    Create callbacks once, never per call.
 4. **Wire the core**: hop with `onMain`/`onMainValue`, or `postMain` + `await`
    + `deliver` for asynchronous native results. Start with `needsApp` when
@@ -7405,7 +7448,7 @@ which npm allows only for packages that exist: the first release uses an
 | power events | NSWorkspace sleep/wake, `com.apple.screenIsLocked` distributed notifications | logind `PrepareForSleep` (system bus), screen saver `ActiveChanged` (GNOME, freedesktop) | `WM_POWERBROADCAST`, `WM_WTSSESSION_CHANGE` |
 | Now Playing and media keys | `MPNowPlayingInfoCenter` (its `nowPlayingInfo` and `playbackState`; artwork as an `MPMediaItemArtwork` decoding the bytes it holds when asked) and the targets of `MPRemoteCommandCenter`'s commands, enabled as the info offers them; MediaPlayer.framework loads with the first `Set` | an MPRIS player (`org.mpris.MediaPlayer2` and `.Player` at `/org/mpris/MediaPlayer2`, exported with `g_dbus_connection_register_object`), whose bus name `org.mpris.MediaPlayer2.<app>.instance<pid>` is owned only while it shows something; `PropertiesChanged` on each change, `Seeked` when the position jumps; `xesam:artist` lists `Artists`; the artwork goes to a file in `$XDG_RUNTIME_DIR` for `mpris:artUrl`; `Raise` reaches the core as `platform.MediaRaise`, which shows and focuses the window that had the keyboard last | the `SystemMediaTransportControls` of the application window (`ISystemMediaTransportControlsInterop::GetForWindow`), with agile event handlers, a `RandomAccessStreamReference` over a memory stream for the thumbnail, and the timeline properties for position and seeking |
 | KeepAwake | `NSProcessInfo` activity (shows in `pmset -g assertions`) | XDG portal `Inhibit`, else `org.freedesktop.ScreenSaver.Inhibit` | `PowerCreateRequest` |
-| KeepRunning | `NSProcessInfo` activity `NSActivityUserInitiatedAllowingIdleSystemSleep`: no App Nap, idle sleep allowed (not in `pmset -g assertions`) | nothing: desktops don't slow apps out of sight | nothing yet (power throttling, EcoQoS, would be `SetProcessInformation`'s `ProcessPowerThrottling`) |
+| KeepRunning | `NSProcessInfo` activity `NSActivityUserInitiatedAllowingIdleSystemSleep`: no App Nap, idle sleep allowed (not in `pmset -g assertions`) | nothing: desktops don't slow apps out of sight | `SetProcessInformation`'s `ProcessPowerThrottling`: execution speed opted out until the last release, which puts back the policy read before (usually the system's to decide) |
 | IsOnBattery, IdleTime | IOKit power sources, `CGEventSourceSecondsSinceLastEventType` | `/sys/class/power_supply`; Mutter idle monitor or `GetSessionIdleTime` | `GetSystemPowerStatus`, `GetLastInputInfo` |
 | network status | `nw_path_monitor` on a queue of its own, the first `Status` waiting (up to a second) for its first path; online when the path is satisfied, metered when it is expensive or constrained | `GNetworkMonitor`, `network-available` (a default route) and `network-metered` | `GetNetworkConnectivityHint`, `NotifyNetworkConnectivityHintChange`; online from local access up (not none or hidden), metered for a fixed or variable cost, roaming, over or near the data limit |
 | window position | honored | ignored by Wayland compositors | honored |

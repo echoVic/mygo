@@ -20,10 +20,25 @@ import (
 // It is errors.ErrUnsupported too (errors.Is), which apps check.
 var ErrUnsupported error = unsupportedError{}
 
+// Unsupported returns ErrUnsupported in a backend's own words, a browser's
+// or a phone's: Error reports message, and errors.Is matches it as
+// ErrUnsupported and errors.ErrUnsupported.
+func Unsupported(message string) error { return unsupportedMessage(message) }
+
 type unsupportedError struct{}
 
 func (unsupportedError) Error() string        { return "not supported on this platform" }
 func (unsupportedError) Is(target error) bool { return target == errors.ErrUnsupported }
+
+type unsupportedMessage string
+
+func (e unsupportedMessage) Error() string { return string(e) }
+func (unsupportedMessage) Unwrap() error   { return ErrUnsupported }
+
+// ErrNavigated is what CallAsyncFunction fails with when the document the
+// body ran in went away before it answered, and what Page.Eval returns
+// then.
+var ErrNavigated = errors.New("mygo: the page navigated away before it answered")
 
 // ErrNotificationsDenied is what ShowNotification fails with when the user
 // does not allow the app to show notifications.
@@ -447,6 +462,9 @@ type WindowOptions struct {
 	HasShadow      bool
 	Frameless      bool
 	Transparent    bool
+	// ConsumeActivationClick withholds the activation press from a
+	// window's content (macOS, Windows). Other platforms ignore it.
+	ConsumeActivationClick bool
 	// BackgroundColor is painted before the page renders; nil keeps the
 	// platform default.
 	BackgroundColor *Color
@@ -742,7 +760,9 @@ type Page interface {
 	// CallAsyncFunction runs body as the body of an async function in the
 	// main frame, awaits it and reports the returned value, which the
 	// caller arranges to be a string. err is non-nil when the body fails to
-	// compile or the evaluation fails natively. Page CSP does not apply.
+	// compile or the evaluation fails natively, and is ErrNavigated when
+	// the webview tells that the document it ran in went away. Page CSP
+	// does not apply.
 	CallAsyncFunction(body string, cb func(result string, err error))
 	SetZoom(factor float64)
 	Zoom() float64
@@ -1036,7 +1056,8 @@ type WindowHandler interface {
 	// takes the files where they are, for KeyPressed whether it took
 	// the key itself, which the system then leaves alone (Windows opens no
 	// menu for Alt and the key), for TextComposition whether it took the
-	// composition, which the input method gives up otherwise (macOS), and
+	// composition, which the input method gives up otherwise (macOS), for
+	// PointerScroll whether the content scrolled or a handler took it, and
 	// for SurfaceCommandEnabled whether the command would act; it returns
 	// false for other events.
 	SurfaceEvent(ev SurfaceEvent) bool
@@ -1083,11 +1104,35 @@ type SchemeRequest struct {
 	// not import net/http, which builds for browsers leave out: values of
 	// either type assign to the other.
 	Header map[string][]string
-	// Body is nil for requests without a body.
+	// Body is nil for requests without a body. Backends, which hold the
+	// whole body, pass it as BytesBody, whose length becomes the
+	// request's ContentLength.
 	Body io.ReadCloser
 	// Responder methods must be called on the main thread, Respond first.
 	Responder SchemeResponder
 }
+
+// BytesBody is a SchemeRequest's body held in memory. Its Len tells the
+// request's ContentLength, which io.NopCloser would hide: handlers that
+// trust it, as httputil.ReverseProxy, would drop the body. It has only
+// Read, Len and Close, which every app keeps (a bytes.Reader's other
+// methods would grow apps by 8 KB).
+func BytesBody(b []byte) io.ReadCloser { return &bytesBody{b} }
+
+type bytesBody struct{ b []byte }
+
+func (r *bytesBody) Read(p []byte) (int, error) {
+	if len(r.b) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(p, r.b)
+	r.b = r.b[n:]
+	return n, nil
+}
+
+func (r *bytesBody) Len() int { return len(r.b) }
+
+func (*bytesBody) Close() error { return nil }
 
 // SchemeResponder delivers a custom protocol response to the webview.
 type SchemeResponder interface {
@@ -1431,8 +1476,9 @@ type Power interface {
 	// sleeping while idle until release is called.
 	KeepAwake(display bool, reason string) (release func())
 	// KeepRunning keeps the system from slowing the app down while none
-	// of its windows shows, as macOS's App Nap does, until release is
-	// called; it leaves the system free to sleep when idle.
+	// of its windows shows, as macOS's App Nap and Windows' power
+	// throttling do, until release is called; it leaves the system free
+	// to sleep when idle.
 	KeepRunning(reason string) (release func())
 	OnBattery() bool
 	IdleTime() time.Duration
