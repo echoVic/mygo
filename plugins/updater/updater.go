@@ -35,6 +35,7 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -346,10 +347,17 @@ func (u *updater) load() {
 		}
 		u.mu.Lock()
 		defer u.mu.Unlock()
-		u.file = filepath.Join(dir, stateFile)
-		if data, err := os.ReadFile(u.file); err == nil {
+		file := filepath.Join(dir, stateFile)
+		data, err := os.ReadFile(file)
+		switch {
+		case err == nil:
 			_ = json.Unmarshal(data, &u.state) // a damaged file is ignored
+		case !errors.Is(err, fs.ErrNotExist):
+			// One that cannot be read is not saved over, which would lose
+			// the version the user skipped: the state stays in memory.
+			return
 		}
+		u.file = file
 	})
 }
 

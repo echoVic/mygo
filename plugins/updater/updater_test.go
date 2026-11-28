@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -770,5 +771,28 @@ func TestPage(t *testing.T) {
 		if !strings.Contains(p, want) {
 			t.Errorf("the page lacks %s", want)
 		}
+	}
+}
+
+// A state file that cannot be read is not one that is not there: the
+// version the user skipped and the last check stay in it, and are not
+// replaced by a fresh state on the next save.
+func TestUnreadableStateIsKept(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a file its owner cannot read")
+	}
+	h := newHarness(t, Options{})
+	path := filepath.Join(h.dir, stateFile)
+	kept := []byte(`{"skippedVersion":"2.0.0"}`)
+	if err := os.WriteFile(path, kept, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(path, 0o644) })
+	waitDone(t, h.begin(false))
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != string(kept) {
+		t.Fatalf("state file %q, %v; want it kept as %q", got, err, kept)
 	}
 }
