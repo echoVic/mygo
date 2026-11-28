@@ -644,7 +644,10 @@ func (rt *engine) pointerDown(x, y float32, button int, mods Modifiers, clicks i
 		// The first click on an EditableText outside a list goes where it
 		// would on a Text, to a card around it that takes clicks; counted
 		// as the text's, the next press makes the text's double click.
-		target = rt.interactiveAround(chain, target)
+		// With nothing around that takes it, the text keeps its click.
+		if o := rt.interactiveAround(chain, target); o != nil {
+			target = o
+		}
 	}
 	if button == 1 && rt.menuPress(chain, x, y) {
 		return

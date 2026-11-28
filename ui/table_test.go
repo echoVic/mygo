@@ -482,6 +482,22 @@ func TestEditableTextLeavesClicksToItsContainer(t *testing.T) {
 	}
 }
 
+// With nothing around it that takes clicks, an EditableText keeps its own
+// click, for Clicked asked of it.
+func TestEditableTextKeepsItsClickAlone(t *testing.T) {
+	name := "Notes"
+	clicks := 0
+	tt := coreNewTester(func(c *context) {
+		if coreEditableText(c, &name).Clicked() {
+			clicks++
+		}
+	}, 400, 300)
+	tt.Click("Notes")
+	if clicks != 1 {
+		t.Fatalf("a click on an EditableText alone: Clicked saw %d clicks, want 1", clicks)
+	}
+}
+
 func TestTableRoundRows(t *testing.T) {
 	names := []string{"a.txt", "b.txt", "c.txt"}
 	cols := []TableColumn{{Title: "Name"}, {Title: "Kind", Width: 100}, {Title: "Size", Width: 80, Align: End}}
