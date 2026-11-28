@@ -171,6 +171,15 @@ type ListState struct {
 	// cells in a color of their own, the rest of their rows in a lighter
 	// one, and every other row striped. Its zero value keeps the accent.
 	CellsStyle CellsStyle
+	// ChosenColor fills the rows chosen in place of the accent, and
+	// ChosenText colors what they hold in place of AccentText, as a quiet
+	// gray in a file tree beside an editor, where the accent would be
+	// loud: an Outline's arrows too. With ChosenColor and no ChosenText,
+	// the rows keep the theme's Text. ChosenColor stays in a window not
+	// drawn as active, where the accent fades (Theme.InactiveAccent). Zero
+	// colors keep the theme's; a Table choosing cells paints its rows with
+	// CellsStyle.
+	ChosenColor, ChosenText Color
 	// Sort, when set, is the column a Table's rows are sorted by: a click
 	// on the header of a Sortable column sorts by it, ascending, and
 	// another reverses the order, which the header shows. Sort the rows as
@@ -880,6 +889,9 @@ func (f *listFrame) build(i int) *node {
 			}
 		} else {
 			w.Selected(on)
+			if on {
+				s.chosenColors(w, t)
+			}
 		}
 		switch r := t.Radius; {
 		case f.flat && !s.RoundRows:
@@ -937,6 +949,20 @@ func (f *listFrame) buildLate(i int) *node {
 	c.parent, c.theme = parent, theme
 	c.rt.late = true
 	return w
+}
+
+// chosenColors paints w, a row chosen, in ChosenColor and ChosenText where
+// they are set, over the accent Selected gave it.
+func (s *ListState) chosenColors(w *node, t *Theme) {
+	switch {
+	case s.ChosenText != Transparent:
+		w.TextColor(s.ChosenText)
+	case s.ChosenColor != Transparent:
+		w.TextColor(t.Text)
+	}
+	if s.ChosenColor != Transparent {
+		w.Background(s.ChosenColor)
+	}
 }
 
 func (f *listFrame) isHeader(i int) bool { return f.s.Header != nil && f.s.Header(i) }

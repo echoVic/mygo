@@ -367,9 +367,13 @@ var allMod = func() Modifiers {
 }()
 
 // arrowColor is the color of the arrow of an item of a tree: muted, or
-// the accent's text on the item chosen.
+// the text's on the item chosen, the accent's (AccentText) unless the
+// list chose another (ListState.ChosenText).
 func arrowColor(t *Theme, item *node) Color {
 	if item != nil && item.checked == 2 {
+		if item.ts.set&setColor != 0 {
+			return item.ts.color
+		}
 		return t.AccentText
 	}
 	return t.TextMuted

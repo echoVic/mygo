@@ -128,6 +128,17 @@ When the same list shows another set of rows, as another table's, start
 its state afresh (`app.list = ui.ListState{}`) so that it forgets the item
 chosen before and the place it scrolled to.
 
+Rows chosen show in the accent, with `AccentText` on it. `ChosenColor` fills
+them with a color of your own and `ChosenText` colors what they hold, as a
+quiet gray in a file tree beside an editor, where the accent would be loud;
+an [outline](outline.md)'s arrows take `ChosenText` too. With `ChosenColor`
+alone, the rows keep the theme's `Text`. `ChosenColor` stays in a window not
+drawn as active, where the accent fades.
+
+```go
+app.list.ChosenColor = ui.Hex("#3a3a3c")
+```
+
 Files to choose several of, by their paths:
 
 ```go

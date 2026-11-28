@@ -69,6 +69,12 @@ if app.colRow >= 0 { // -1 once another table's columns replaced the chosen one
 
 当同一个列表显示另一组行时，例如换成另一个表格的数据，应重新初始化状态（`app.list = ui.ListState{}`），清除原来的选择和滚动位置。
 
+选中的行以强调色显示，文字为 `AccentText`。`ChosenColor` 用你自己的颜色填充选中行，`ChosenText` 设置行内内容的颜色，例如编辑器旁的文件树用低调的灰色，避免强调色过于醒目；[大纲](outline.md)的箭头也使用 `ChosenText`。只设置 `ChosenColor` 时，行内保持主题的 `Text` 颜色。窗口未以活动状态绘制时强调色会变淡，`ChosenColor` 则保持不变。
+
+```go
+app.list.ChosenColor = ui.Hex("#3a3a3c")
+```
+
 按路径选择多个文件：
 
 ```go

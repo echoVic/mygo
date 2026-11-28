@@ -502,3 +502,63 @@ func BenchmarkOutlineOpen(b *testing.B) {
 		})
 	}
 }
+
+// ChosenColor and ChosenText paint the row chosen in place of the accent
+// and AccentText, with the outline's arrow in ChosenText; ChosenColor alone
+// keeps the theme's Text on the row. ChosenColor stays in a window not
+// drawn as active, where the accent fades.
+func TestOutlineChosenColors(t *testing.T) {
+	gray, light := Hex("#3a3a3c"), Hex("#e5e5ea")
+	for _, tc := range []struct {
+		name        string
+		color, text Color
+		// bg and fg are the row's colors, nil for the theme's accent
+		// and AccentText, or its Text.
+		bg, fg func(t *Theme) Color
+	}{
+		{"by default", Transparent, Transparent, nil, nil},
+		{"ChosenColor", gray, Transparent, func(*Theme) Color { return gray }, func(t *Theme) Color { return t.Text }},
+		{"ChosenColor and ChosenText", gray, light, func(*Theme) Color { return gray }, func(*Theme) Color { return light }},
+		{"ChosenText", Transparent, light, nil, func(*Theme) Color { return light }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sel := 0
+			var s OutlineState[string]
+			s.List.Selected = &sel
+			s.List.ChosenColor, s.List.ChosenText = tc.color, tc.text
+			var th *Theme
+			tt := coreNewTesterWith(func(c *context) {
+				th = c.theme
+				coreOutline(c, &s, []string{"src", "docs"}, children, func(path string) {
+					coreText(c, baseName(path))
+				}).Grow(1)
+			}, 300, 200, TesterOptions{Dark: true})
+			check := func(when string, accent Color) {
+				t.Helper()
+				var row *node
+				for _, r := range s.List.frame.rows {
+					if r.i == 0 {
+						row = r.e
+					}
+				}
+				if row == nil {
+					t.Fatalf("%s: the row chosen was not built", when)
+				}
+				bg, fg := accent, th.AccentText
+				if tc.bg != nil {
+					bg = tc.bg(th)
+				}
+				if tc.fg != nil {
+					fg = tc.fg(th)
+				}
+				if row.bg != bg || row.ts.color != fg || arrowColor(th, row) != fg {
+					t.Errorf("%s: the row is %v with text %v and its arrow %v; want %v with text and arrow %v", when, row.bg, row.ts.color, arrowColor(th, row), bg, fg)
+				}
+			}
+			check("in an active window", th.Accent)
+			tt.SetWindowActive(false)
+			tt.Frame()
+			check("in an inactive window", th.inactiveAccent())
+		})
+	}
+}
