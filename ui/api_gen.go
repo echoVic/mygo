@@ -5307,10 +5307,11 @@ func (_handle Element) FixedLineHeight(v float32) Element {
 // Focus gives the element the keyboard focus. Called in every frame, it
 // keeps it there; AutoFocus gives it once. A field around an input, as
 // SearchField's, gives it to its input, where typing goes. When the focus
-// moves to it, it scrolls the containers around it as little as shows it,
-// as Tab does and the web's focus() does; ScrollIntoView lines it up
-// otherwise. While a pointer button is held it scrolls nothing: what a
-// press focuses, as the line a grip moves, is under the pointer.
+// moves to it, it scrolls the containers around it as little as shows it
+// with room for its focus ring, as Tab does and the web's focus() does;
+// ScrollIntoView lines it up otherwise. While a pointer button is held it
+// scrolls nothing: what a press focuses, as the line a grip moves, is
+// under the pointer.
 //
 // Its options, as the web's focus() options, keep the scroll where the
 // user left it: the focus returned to a cell of a grid when a dialog
@@ -7811,9 +7812,10 @@ func (_handle Element) Scale(x float32, y float32) Element {
 
 // ScrollIntoView scrolls the containers around the element as little as
 // shows it, once the frame is laid out: an element added in this frame
-// comes into view with it. Call it in the frame it should come into view,
-// as when it is added or chosen: in every frame, it would keep the user
-// from scrolling it away.
+// comes into view with it, and one with the keyboard focus with room for
+// its focus ring. Call it in the frame it should come into view, as when
+// it is added or chosen: in every frame, it would keep the user from
+// scrolling it away.
 //
 // Its options line the element up elsewhere in the containers, or glide
 // there, as the web's scrollIntoView options do: the current match of a

@@ -258,12 +258,19 @@ func (e *node) shadowMargin() float32 {
 // element may reach, and a DIP more, for its edge's antialiasing: 4 for
 // the theme's ring by default.
 func (e *node) ringMargin() float32 {
+	return max(4, e.ringReach()+1)
+}
+
+// ringReach returns how far beyond its box the focus ring of the element
+// reaches, with the offset it sets or the theme's: 3 for the theme's ring
+// by default, 0 for a ring inside its edge.
+func (e *node) ringReach() float32 {
 	t := e.c.window
 	off := t.FocusRingOffset
 	if e.ringSet&ringOffsetSet != 0 {
 		off = e.ringOffset
 	}
-	return max(4, off+t.focusRingWidth()+1)
+	return max(0, off+t.focusRingWidth())
 }
 
 // setInk sets e's ink from vis, its box in the window, once commit set

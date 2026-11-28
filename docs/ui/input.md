@@ -216,7 +216,9 @@ When the focus moves to an element by the keyboard or by the app (`Focus`,
 `AutoFocus`, a [handle](#persistent-focus)'s `Focus`, or a field bound with
 [`FocusBind`](#focus-bound-to-data)), the scroll containers around it scroll
 as little as shows it, as the web's `element.focus()` does, so keyboard
-navigation of your own keeps the focus in sight. It scrolls once, as the
+navigation of your own keeps the focus in sight. They leave room for its
+focus ring too, which reaches past its edge: one that Tab brings to a
+container's edge stands that far inside it, its ring whole. It scrolls once, as the
 focus moves: calling `Focus` in every frame leaves the user's scrolling
 alone. A click focuses an element where it is, and so does `Focus` while
 a pointer button is held, as for a line that takes the focus from a press

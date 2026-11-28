@@ -80,9 +80,10 @@ func (e *node) TrackScroll(s *ScrollState) *node {
 
 // ScrollIntoView scrolls the containers around the element as little as
 // shows it, once the frame is laid out: an element added in this frame
-// comes into view with it. Call it in the frame it should come into view,
-// as when it is added or chosen: in every frame, it would keep the user
-// from scrolling it away.
+// comes into view with it, and one with the keyboard focus with room for
+// its focus ring. Call it in the frame it should come into view, as when
+// it is added or chosen: in every frame, it would keep the user from
+// scrolling it away.
 //
 // Its options line the element up elsewhere in the containers, or glide
 // there, as the web's scrollIntoView options do: the current match of a
@@ -344,9 +345,17 @@ func revealAll(root *node, asks []revealAsk) {
 }
 
 // reveal scrolls the containers around e, innermost first, to show its
-// box as o says. The layout has sized and arranged the boxes, relative to
-// their parents, but not placed them yet.
+// box as o says, with room for its focus ring while it has the keyboard
+// focus. The layout has sized and arranged the boxes, relative to their
+// parents, but not placed them yet.
 func reveal(e *node, o ScrollIntoViewOptions) {
+	rt := e.c.rt
+	var ring float32
+	if rt.focused == e.id {
+		// Its ring reaches past its box, where a scroll showing the box
+		// alone, at its edge, would cut it: a link's past its text's.
+		ring = e.ringReach()
+	}
 	for e.isInline() {
 		e = e.parent
 	}
@@ -355,8 +364,9 @@ func reveal(e *node, o ScrollIntoViewOptions) {
 		// An app's text field shows its caret: the text it edits may be
 		// taller than the view, as a code editor as high as its lines.
 		x, y, w, h = x+r.X, y+r.Y, max(r.W, 1), r.H
+		ring = 0
 	}
-	rt := e.c.rt
+	x, y, w, h = x-ring, y-ring, w+2*ring, h+2*ring
 	frame := rt.frame
 	smooth := o.Animation != nil && !rt.preferences().ReduceMotion && !rt.instant()
 	for ch, p := e, e.parent; p != nil; ch, p = p, p.parent {
@@ -384,13 +394,17 @@ func reveal(e *node, o ScrollIntoViewOptions) {
 				// The start is at the right.
 				inline = inline.flip()
 			}
-			lx := max(0, min(inline.offset(left, cx, w, p.border[3], p.w-p.border[1]), mx))
+			// A box the view holds but for its ring shows whole, the ring
+			// giving way to it.
+			gx := min(ring, max(0, (w-(p.w-p.border[1]-p.border[3]))/2))
+			gy := min(ring, max(0, (h-(p.h-p.border[0]-p.border[2]))/2))
+			lx := max(0, min(inline.offset(left, cx+float64(gx), w-2*gx, p.border[3], p.w-p.border[1]), mx))
 			sx := lx
 			if rtl {
 				// Right to left, offsets count from the right.
 				sx = mx - sx
 			}
-			sy := max(0, min(o.Block.offset(st.scrollY, cy, h, p.border[0], p.h-p.border[2]), my))
+			sy := max(0, min(o.Block.offset(st.scrollY, cy+float64(gy), h-2*gy, p.border[0], p.h-p.border[2]), my))
 			if smooth {
 				// The containers around go to where it will be.
 				rt.glideScroll(st, sx, sy, *o.Animation, e.c.now)

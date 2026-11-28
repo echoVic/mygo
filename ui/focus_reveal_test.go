@@ -93,6 +93,94 @@ func TestFocusScrollsTheElementIntoView(t *testing.T) {
 	}
 }
 
+// The control Tab brings to the edge of a scroll comes into view with room
+// for its focus ring, which reaches past its box, and no more: at the
+// scroll's foot as Tab goes down and at its top as Shift+Tab goes back up,
+// for a link, whose ring is around its text, and a check box, which rings
+// its box itself, as for a button. A control the view holds but for its
+// ring shows whole, the ring giving way.
+func TestTabBringsTheFocusRingIntoView(t *testing.T) {
+	var reach float32 // the window theme's, which reveal reads
+	ringOf := func(c *ui.Context) {
+		th := c.Theme()
+		reach = th.FocusRingOffset + th.FocusRingWidth
+		if th.FocusRingWidth == 0 {
+			reach += 2 // the theme's default width
+		}
+	}
+	page := func(content func(c *ui.Context)) func(c *ui.Context) {
+		return func(c *ui.Context) {
+			ringOf(c)
+			ui.Scroll(c.Key("page")).Height(200).Children(func() {
+				ui.Box(c).Height(300).Shrink(0)
+				content(c)
+				ui.Box(c).Height(300).Shrink(0)
+			})
+		}
+	}
+	focused := func(t *testing.T, tt *ui.Tester, r ui.Role, name string) ui.Rect {
+		t.Helper()
+		a, ok := tt.AccessByRole(r, name)
+		if !ok || !a.Focused {
+			t.Fatalf("%s: shown %v, focused %v", name, ok, a.Focused)
+		}
+		return a.Bounds
+	}
+	t.Run("buttons", func(t *testing.T) {
+		rows := focusRows(func(*ui.Context, int, ui.Element) {})
+		tt := ui.NewTester(func(c *ui.Context) {
+			ringOf(c)
+			rows(c)
+		}, 400, 300)
+		for range 41 {
+			tt.Key(0, ui.KeyTab)
+		}
+		if r := focused(t, tt, ui.RoleButton, "Row 40"); r.Y+r.H+reach != 200 {
+			t.Errorf("Tab to Row 40 left it at y = %v..%v; want its ring's %v DIPs below it to end on the view's foot, at 200", r.Y, r.Y+r.H, reach)
+		}
+		for range 30 {
+			tt.Key(ui.Shift, ui.KeyTab)
+		}
+		if r := focused(t, tt, ui.RoleButton, "Row 10"); r.Y-reach != 0 {
+			t.Errorf("Shift+Tab to Row 10 left it at y = %v..%v; want its ring's %v DIPs above it to start at the view's top", r.Y, r.Y+r.H, reach)
+		}
+	})
+	for _, tc := range []struct {
+		name    string
+		role    ui.Role
+		content func(c *ui.Context)
+	}{
+		{"The guide", ui.RoleLink, func(c *ui.Context) {
+			ui.RichText(c).Children(func() { ui.Link(c, "The guide", "https://example.com") })
+		}},
+		{"Remember me", ui.RoleCheckBox, func(c *ui.Context) {
+			checked := false
+			ui.Checkbox(c, &checked, "Remember me")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tt := ui.NewTester(page(tc.content), 400, 300)
+			tt.Key(0, ui.KeyTab)
+			if r := focused(t, tt, tc.role, tc.name); r.Y+r.H+reach != 200 {
+				t.Errorf("Tab to %q below the view left it at y = %v..%v; want its ring's %v DIPs below it to end on the view's foot",
+					tc.name, r.Y, r.Y+r.H, reach)
+			}
+		})
+	}
+	t.Run("nearly as tall as the view", func(t *testing.T) {
+		for _, h := range []float32{194, 196, 198, 200} {
+			tt := ui.NewTester(page(func(c *ui.Context) { ui.Button(c, "Tall").Height(h).Shrink(0) }), 400, 300)
+			tt.Key(0, ui.KeyTab)
+			// The access tree's box is what of the button shows: its top is in view.
+			top, room := focused(t, tt, ui.RoleButton, "Tall").Y, min(reach, (200-h)/2)
+			if top != room {
+				t.Errorf("Tab to a button %v DIPs tall left it at y = %v..%v; want it at %v..%v, whole, its ring %v DIPs each way",
+					h, top, top+h, room, room+h, room)
+			}
+		}
+	})
+}
+
 // Focus called in every frame scrolls the element into view once, as the
 // focus moves to it, and then leaves the user's scrolling alone.
 func TestFocusEveryFrameKeepsTheUserScroll(t *testing.T) {
