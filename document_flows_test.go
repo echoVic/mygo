@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
 	"time"
 
@@ -335,7 +336,11 @@ func TestDocumentMenuOpen(t *testing.T) {
 	})
 	before := len(allDocuments())
 	documentRole(RoleOpen, nil)
-	waitFor(t, "the dialog's documents to open", func() bool { return len(allDocuments()) == before+2 })
+	// Each is shown before it is recorded in the recent documents, whose
+	// file goes in the test's PathUserData.
+	waitFor(t, "the dialog's documents to open", func() bool {
+		return len(allDocuments()) == before+2 && slices.Contains(App.RecentDocuments(), b)
+	})
 
 	asked := answer("OK")
 	onMain(func() {
