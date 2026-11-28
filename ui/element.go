@@ -482,6 +482,9 @@ type node struct {
 	// handleDoubleClick marks a DragWindow handle whose double click the
 	// view takes (WindowDoubleClicked) rather than the window.
 	handleDoubleClick bool
+	// passClick marks an EditableText outside a list, which leaves the
+	// first click of a series to what is around it, as a Text does.
+	passClick bool
 	// accessHidden leaves it and the elements inside it out of what
 	// assistive technology reads, while they still show and take input
 	// (AccessHidden).

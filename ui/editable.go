@@ -22,7 +22,9 @@ const renameDelay = 500 * time.Millisecond
 // file's name in Finder: a double click on it, or Enter while it has the
 // focus, shows a text input of it, with the text before its extension
 // selected. Enter keeps what was typed, as moving the focus away does, and
-// Escape goes back; Changed reports a new value.
+// Escape goes back; Changed reports a new value. A click on the text takes
+// the focus and goes on where it would on a Text, to a card around it that
+// takes clicks (Clicked), which chooses what the text names.
 //
 // In a List's or a Table's rows, the list keeps the focus and the text
 // takes none: Enter on macOS, and F2, edit the text of the row chosen,
@@ -60,6 +62,7 @@ func coreEditableText(c *context, value *string) *node {
 		}
 	} else {
 		box.Focusable()
+		box.passClick = true
 		if !st.editing && (box.DoubleClicked() || box.Shortcut(0, KeyEnter)) {
 			start = true
 		}

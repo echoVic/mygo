@@ -3,7 +3,9 @@ package ui
 // RowDoubleClicked reports, while a row of a List or a Table builds, that
 // the row was double-clicked since the last frame with the pointer over the
 // element: a cell sees its row's double click this way and leaves the click
-// to the row, which chooses, where DoubleClicked would take it.
+// to the row, which chooses, where DoubleClicked would take it. Outside
+// the rows of a List or a Table it reports nothing, which a Tester makes a
+// panic and an app logs once.
 //
 //	ui.Table(c, &app.list, cols, len(app.rows), func(row, col int) {
 //		cell := ui.Box(c).FillWidth().Children(func() { ui.Text(c, app.rows[row][col]) })
@@ -16,7 +18,11 @@ func (e *node) RowDoubleClicked() bool {
 		return false
 	}
 	row := e.c.row
-	return row != nil && row.double && e.Hovered()
+	if row == nil {
+		e.c.rt.outsideRow(e.id, "RowDoubleClicked")
+		return false
+	}
+	return row.double && e.Hovered()
 }
 
 // RowClicked reports, while a row of a List or a Table builds, that the
@@ -31,7 +37,9 @@ func (e *node) RowDoubleClicked() bool {
 // RowDoubleClicked, as on the systems' own lists. Assistive technology
 // pressing the row, without the pointer, reports it to the first element
 // asking. In a list that does not choose its rows, asking makes the row
-// take the click.
+// take the click. Outside the rows of a List or a Table it reports
+// nothing, which a Tester makes a panic and an app logs once: Clicked is
+// the element's own click there.
 //
 //	ui.List(c, &app.files, len(app.names), func(i int) {
 //		if ui.Text(c, app.names[i]).Padding(6, 12).FillWidth().RowClicked() {
@@ -43,7 +51,11 @@ func (e *node) RowClicked() bool {
 		return false
 	}
 	row := e.c.row
-	if row == nil || row.e == nil {
+	if row == nil {
+		e.c.rt.outsideRow(e.id, "RowClicked")
+		return false
+	}
+	if row.e == nil {
 		return false
 	}
 	row.e.flags |= flagClickable

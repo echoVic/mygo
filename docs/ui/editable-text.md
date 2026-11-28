@@ -14,6 +14,21 @@ if ui.EditableText(c, &app.title).Changed() {
 }
 ```
 
+A click on the text takes the focus, for Enter to edit it, and goes on
+where it would on a `Text`: a card around it that takes clicks sees it with
+`Clicked`, as a list of workspaces choosing the one whose name was clicked.
+
+```go
+card := ui.Column(c).Padding(12).Children(func() {
+	if ui.EditableText(c, &ws.Name).Changed() {
+		app.rename(ws)
+	}
+})
+if card.Clicked() {
+	app.open(ws)
+}
+```
+
 ## In lists and tables
 
 In a [list](list.md)'s or a [table](table.md)'s rows, the list keeps the

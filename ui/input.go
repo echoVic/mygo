@@ -640,6 +640,12 @@ func (rt *engine) pointerDown(x, y float32, button int, mods Modifiers, clicks i
 		h.drag.reset(rt.now(), x, y)
 		return
 	}
+	if button == 0 && clicks == 1 && target != nil && target.passClick {
+		// The first click on an EditableText outside a list goes where it
+		// would on a Text, to a card around it that takes clicks; counted
+		// as the text's, the next press makes the text's double click.
+		target = rt.interactiveAround(chain, target)
+	}
 	if button == 1 && rt.menuPress(chain, x, y) {
 		return
 	}
@@ -746,6 +752,20 @@ func (rt *engine) pointerCancel(button int) {
 		return
 	}
 	rt.pointerUp(button, 0, true)
+}
+
+// interactiveAround returns the first interactive element of chain, from
+// the innermost out, around s, or nil.
+func (rt *engine) interactiveAround(chain []uint64, s *state) *state {
+	around := false
+	for _, id := range chain {
+		if id == s.id {
+			around = true
+		} else if o := rt.states[id]; around && o != nil && o.flags&interactive != 0 {
+			return o
+		}
+	}
+	return nil
 }
 
 // countPress counts the backend's n-th quick press from the first on the

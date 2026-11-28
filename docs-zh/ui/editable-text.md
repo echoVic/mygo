@@ -10,6 +10,19 @@ if ui.EditableText(c, &app.title).Changed() {
 }
 ```
 
+单击文本会让它获得焦点，以便按 Enter 编辑；点击本身则像落在 `Text` 上一样继续传给外层：外层接收点击的卡片可以用 `Clicked` 读到它，例如工作区列表选中被点击名称所在的工作区。
+
+```go
+card := ui.Column(c).Padding(12).Children(func() {
+	if ui.EditableText(c, &ws.Name).Changed() {
+		app.rename(ws)
+	}
+})
+if card.Clicked() {
+	app.open(ws)
+}
+```
+
 ## 在列表和表格中
 
 在[列表](list.md)或[表格](table.md)的行中，焦点保留在列表上，文本不单独获取焦点：macOS 上按 Return，其他平台上按 F2，会编辑选中行的文本；双击行则触发 `Submitted`。选中一行后，等到双击判定间隔结束，再单击该行的文本即可编辑。

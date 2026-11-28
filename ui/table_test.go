@@ -439,6 +439,49 @@ func TestEditableText(t *testing.T) {
 	}
 }
 
+// Outside a list, an EditableText leaves a click to the element around it
+// that takes clicks, as a card choosing what it names, while it takes the
+// focus, for Enter to edit it, and a double click edits it.
+func TestEditableTextLeavesClicksToItsContainer(t *testing.T) {
+	name := "Notes"
+	clicks := 0
+	tt := coreNewTester(func(c *context) {
+		card := coreColumn(c).Padding(12).Children(func() {
+			coreEditableText(c, &name)
+			coreText(c, "3 files")
+		})
+		if card.Clicked() {
+			clicks++
+		}
+	}, 400, 300)
+	tt.Click("3 files")
+	if clicks != 1 {
+		t.Fatalf("a click on the card's other text: the card saw %d clicks, want 1", clicks)
+	}
+	tt.Advance(time.Second)
+	tt.Click("Notes")
+	if clicks != 2 {
+		t.Fatalf("a click on the name: the card saw %d clicks, want 2", clicks)
+	}
+	tt.Key(0, KeyEnter)
+	tt.Key(Cmd, KeyA)
+	tt.Type("Plan")
+	tt.Key(0, KeyEnter)
+	if name != "Plan" {
+		t.Fatalf("a click on the name, then Enter: the name is %q, want it edited", name)
+	}
+	tt.Advance(time.Second)
+	r, _ := tt.Find("Plan")
+	tt.ClickAt(r.X+5, r.Y+5)
+	tt.ClickAt(r.X+5, r.Y+5)
+	tt.Key(Cmd, KeyA)
+	tt.Type("Ideas")
+	tt.Key(0, KeyEnter)
+	if name != "Ideas" || clicks != 3 {
+		t.Errorf("a double click on the name: the name is %q, the card saw %d clicks; want it edited, and the first click the card's", name, clicks)
+	}
+}
+
 func TestTableRoundRows(t *testing.T) {
 	names := []string{"a.txt", "b.txt", "c.txt"}
 	cols := []TableColumn{{Title: "Name"}, {Title: "Kind", Width: 100}, {Title: "Size", Width: 80, Align: End}}

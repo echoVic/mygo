@@ -61,6 +61,36 @@ func (rt *engine) lateKey(id uint64, k any) {
 	rt.warn(msg)
 }
 
+// outsideRow reports RowClicked or RowDoubleClicked (query) asked of an
+// element outside the rows of a List or a Table, where no row takes a
+// click for it to report: they report nothing there, where Clicked and
+// DoubleClicked would. A Tester panics (engine.strict), so that tests fail
+// where it was asked; apps log it once for each element, and the
+// inspector lists it.
+func (rt *engine) outsideRow(id uint64, query string) {
+	if rt.painting || rt.journal.on {
+		return
+	}
+	if !rt.strict {
+		if rt.outsideRows == nil {
+			rt.outsideRows = map[uint64]bool{}
+		}
+		if rt.outsideRows[id] {
+			return
+		}
+		rt.outsideRows[id] = true
+	}
+	msg := "ui: " + query + " outside the rows of a List or a Table, where it reports nothing: use Clicked or DoubleClicked there"
+	if at := callSite(); at != "" {
+		msg += " (" + at + ")"
+	}
+	if rt.strict {
+		panic(msg)
+	}
+	log.Print(msg)
+	rt.warn(msg)
+}
+
 // warn notes a warning for the inspector.
 func (rt *engine) warn(msg string) {
 	if len(rt.warnings) == maxWarnings {

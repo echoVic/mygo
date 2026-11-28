@@ -1,8 +1,11 @@
 package ui
 
 import (
+	"bytes"
 	"fmt"
+	"log"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -235,5 +238,55 @@ func TestRowClickedTableAndAccess(t *testing.T) {
 	tt.Frame()
 	if !slices.Equal(hits, []hit{{1, 0}}) || sel != 1 {
 		t.Fatalf("pressed Line 1 from assistive technology: RowClicked %v, chose %d", hits, sel)
+	}
+}
+
+// RowClicked and RowDoubleClicked report nothing outside the rows of a List
+// or a Table, which a Tester makes a panic, so that a test fails where they
+// were asked.
+func TestRowClickOutsideARowPanicsInTester(t *testing.T) {
+	for _, query := range []string{"RowClicked", "RowDoubleClicked"} {
+		t.Run(query, func(t *testing.T) {
+			defer func() {
+				r := recover()
+				if r == nil || !strings.Contains(fmt.Sprint(r), query+" outside the rows") {
+					t.Errorf("recovered %v, want the panic naming %s", r, query)
+				}
+			}()
+			NewTester(func(c *Context) {
+				Column(c).Children(func() {
+					e := Text(c, "Open").Padding(6)
+					if query == "RowClicked" {
+						e.RowClicked()
+					} else {
+						e.RowDoubleClicked()
+					}
+				})
+			}, 200, 100)
+		})
+	}
+}
+
+// Outside a Tester, RowClicked outside a row logs and warns once for each
+// element, and reports nothing.
+func TestRowClickOutsideARowWarnsOnce(t *testing.T) {
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(prev)
+	clicked := false
+	rt := newRuntime(func(c *context) {
+		for i := range 2 {
+			if coreText(c, fmt.Sprint("Open ", i)).RowClicked() {
+				clicked = true
+			}
+		}
+	}, &headless{w: 200, h: 100, scale: 1})
+	defer rt.close()
+	rt.runFrame()
+	rt.runFrame()
+	const want = "RowClicked outside the rows of a List or a Table"
+	if got := strings.Count(buf.String(), want); got != 2 || len(rt.warnings) != 2 || clicked {
+		t.Errorf("logged %d times, warned %q, clicked %v; want once for each of the two texts", got, rt.warnings, clicked)
 	}
 }

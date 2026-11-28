@@ -349,6 +349,9 @@ type engine struct {
 	dirOverride uint8
 	dupKeys     map[uint64]bool
 	lateKeys    map[uint64]bool
+	// outsideRows are the elements that asked RowClicked or
+	// RowDoubleClicked outside a row, reported once each.
+	outsideRows map[uint64]bool
 	warnings    []string
 	// strict makes mistakes found while building panic, as duplicate keys
 	// do in a Tester.
@@ -1772,6 +1775,7 @@ func (rt *engine) commitElement(e *node, clip Rect, hidden bool) {
 	}
 	s.ignoreInput = e.ignoreInput || e.parent != nil && e.parent.st.ignoreInput
 	s.handleDoubleClick = e.handleDoubleClick
+	s.passClick = e.passClick
 	s.accessHidden = e.accessHidden || e.flags&flagInert != 0 || e.parent != nil && e.parent.st.accessHidden
 	s.accessDisabled = e.accessDisabled || e.parent != nil && e.parent.st.accessDisabled
 	s.activeDescendant = 0

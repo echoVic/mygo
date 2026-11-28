@@ -220,7 +220,11 @@ the choice report none, nor does a Shift- or Cmd-click extending it. A double
 click reports its first click with `RowClicked` and its second with
 `RowDoubleClicked`, as the systems' lists do. Assistive technology pressing
 the row reports it to the first element of the row asking, and in a list
-that does not choose its rows, asking makes the row take the click.
+that does not choose its rows, asking makes the row take the click. Outside
+the rows of a list or a table, no row takes a click for them to report:
+they report nothing there, which a `Tester` makes a panic where they were
+asked and an app logs once. `Clicked` and `DoubleClicked` are an element's
+own clicks there.
 
 ```go
 ui.List(c, &app.sidebar, len(app.pages), func(i int) {

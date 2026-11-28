@@ -782,6 +782,10 @@ type state struct {
 	// handleDoubleClick tells that the element, a DragWindow handle,
 	// takes its double click (WindowDoubleClicked).
 	handleDoubleClick bool
+	// passClick tells that the element, an EditableText outside a list,
+	// leaves the first click of a series to the interactive element
+	// around it, and takes the second, which makes its double click.
+	passClick bool
 	// activeDescendant is the element that has the keyboard focus while
 	// this one does (ActiveDescendant), 0 for none.
 	activeDescendant uint64
