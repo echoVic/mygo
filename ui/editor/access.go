@@ -137,8 +137,23 @@ func (ed *editor) accessLines(parent *platform.AccessNode, add func(platform.Acc
 	for line := ed.shown[0]; line <= min(ed.shown[1], h.n-1); line++ {
 		g := h.geometry(line)
 		if g.hidden {
-			// Collapsed: the separator over them is an element of its own.
-			line = h.hiddenSpan(line).to
+			// Collapsed: the separator over them is an element of its own,
+			// and the deleted lines standing on them, as without context
+			// lines or on a file deleted, whose empty text shows no line,
+			// are read as on a line shown.
+			span := h.hiddenSpan(line)
+			i := sort.Search(len(h.blocks), func(i int) bool { return h.blocks[i].line >= span.from })
+			for i < len(h.blocks) && h.blocks[i].line <= span.to {
+				at := h.blocks[i].line
+				above, below := h.blocksOf(at)
+				ag := h.geometry(at)
+				blocks(above, ag.top)
+				blocks(below, ag.below)
+				for i < len(h.blocks) && h.blocks[i].line == at {
+					i++
+				}
+			}
+			line = span.to
 			continue
 		}
 		above, below := h.blocksOf(line)

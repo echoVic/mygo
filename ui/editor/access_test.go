@@ -2,6 +2,7 @@ package editor
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -188,6 +189,28 @@ func TestDiffAccessPatchNumbers(t *testing.T) {
 		if !hasLines(lines, want) {
 			t.Errorf("layout %d reads %v, want %v", layout, lines, want)
 		}
+	}
+}
+
+// Deleted lines standing on collapsed lines, as a unified view shows them
+// without context lines, are read as deleted.
+func TestDiffAccessDeletedOnCollapsedLines(t *testing.T) {
+	var a []string
+	for i := range 40 {
+		a = append(a, fmt.Sprintf("line %d", i))
+	}
+	b := slices.Delete(slices.Clone(a), 20, 21)
+	d := &DiffState{Old: NewBuffer(strings.Join(a, "\n") + "\n"), New: NewBuffer(strings.Join(b, "\n") + "\n"), Layout: DiffUnified, ContextLines: -1}
+	tt := ui.NewTester(func(c *ui.Context) { DiffView(c, d).Fill() }, 800, 400)
+	tt.Frame()
+	var read []string
+	for _, n := range tt.AccessAll() {
+		if n.Role == ui.RoleDeletion {
+			read = append(read, n.Name)
+		}
+	}
+	if !slices.Equal(read, []string{"line 20"}) {
+		t.Errorf("deleted lines read: %q, want line 20", read)
 	}
 }
 

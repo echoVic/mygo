@@ -41,8 +41,10 @@ go on as usual, the diff catching up with them once it arrives; an edit of
 `Old` starts the comparison again.
 
 An empty text has no lines, as `git diff` counts them: the side of a file
-added or deleted, or emptied, shows no line numbers, and its gutter selects
-no line and offers no button. A text's lines end at its final newline, as
+added or deleted, or emptied, shows no line, unless the diff is `Editable`,
+where typing starts on the one it shows, no line numbers, and its gutter
+selects no line and offers no button; the diff is as high as the other
+side's lines. A text's lines end at its final newline, as
 git's do: a diff that isn't `Editable` leaves out the empty line an editor
 starts after it, which no separator counts, while an editable one shows it,
 as typing there adds a line.
@@ -209,8 +211,10 @@ ui.Row(c).Fill().Children(func() {
 		scale = float64(r.H) / max(d.LineTop(editor.DiffNew, d.New.LineCount()), 1)
 		at := func(y float64) float32 { return r.Y + float32(y*scale) }
 		for _, h := range d.Hunks() {
-			top := at(d.LineTop(editor.DiffNew, h.NewStart))
-			bottom := at(d.LineTop(editor.DiffNew, max(h.NewEnd, h.NewStart+1)))
+			// A change's rows on both sides: in a unified view, its deleted
+			// lines above its new ones, as a file deleted is all deleted lines.
+			top := at(min(d.LineTop(editor.DiffOld, h.OldStart), d.LineTop(editor.DiffNew, h.NewStart)))
+			bottom := at(max(d.LineTop(editor.DiffOld, h.OldEnd), d.LineTop(editor.DiffNew, h.NewEnd)))
 			p.Fill(ui.Rect{X: r.X, Y: top, W: r.W, H: max(bottom-top, 2)}, app.changeColor, 0)
 		}
 		view := ui.Rect{X: r.X, Y: at(d.ScrollY()), W: r.W, H: float32(d.ViewportHeight() * scale)}

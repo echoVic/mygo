@@ -21,7 +21,7 @@ editor.DiffView(c, app.diff).Grow(1).FillWidth()
 
 差异视图会跟随缓冲区：任一侧的编辑都会立刻反映出来，查看器只重新比较它附近的行。`New` 也可以是某个编辑器的缓冲区（例如某个文件的），这样差异视图会在输入时显示更改。
 
-空文本按零行计算，与 `git diff` 一致：新增、删除或清空文件时，空文本一侧不显示行号，行号栏也不能选行或显示操作按钮。文本若以换行符结束，就不再计入其后的空行，与 git 一致：未启用 `Editable` 的差异视图会省略编辑器通常在该处显示的空行，折叠分隔符也不计入它；可编辑视图则保留该空行，供用户输入。
+空文本按零行计算，与 `git diff` 一致：新增、删除或清空文件时，空文本一侧不显示任何行（`Editable` 的差异视图除外，它会显示一行供输入），也不显示行号，行号栏也不能选行或显示操作按钮；差异视图的高度就是另一侧各行的高度。文本若以换行符结束，就不再计入其后的空行，与 git 一致：未启用 `Editable` 的差异视图会省略编辑器通常在该处显示的空行，折叠分隔符也不计入它；可编辑视图则保留该空行，供用户输入。
 
 未启用 `Editable` 的差异视图比较行时会连同行尾换行符一起比较，git 也是如此，因此最后一行如果获得或失去换行符，就算作更改行；没有结尾换行符的文本，其最后一行末尾会以淡色显示“文件末尾没有换行”，也就是 git 的 `\ No newline at end of file`。`SetPatch` 的文本只包含补丁中的行，它会根据 `\` 行所指出的一侧打上标记。可编辑的差异视图比较行时不带换行符，也不做任何标记：添加结尾换行符会在其后新增一个空行，输入就落在那里。
 
@@ -102,8 +102,10 @@ ui.Row(c).Fill().Children(func() {
 		scale = float64(r.H) / max(d.LineTop(editor.DiffNew, d.New.LineCount()), 1)
 		at := func(y float64) float32 { return r.Y + float32(y*scale) }
 		for _, h := range d.Hunks() {
-			top := at(d.LineTop(editor.DiffNew, h.NewStart))
-			bottom := at(d.LineTop(editor.DiffNew, max(h.NewEnd, h.NewStart+1)))
+			// A change's rows on both sides: in a unified view, its deleted
+			// lines above its new ones, as a file deleted is all deleted lines.
+			top := at(min(d.LineTop(editor.DiffOld, h.OldStart), d.LineTop(editor.DiffNew, h.NewStart)))
+			bottom := at(max(d.LineTop(editor.DiffOld, h.OldEnd), d.LineTop(editor.DiffNew, h.NewEnd)))
 			p.Fill(ui.Rect{X: r.X, Y: top, W: r.W, H: max(bottom-top, 2)}, app.changeColor, 0)
 		}
 		view := ui.Rect{X: r.X, Y: at(d.ScrollY()), W: r.W, H: float32(d.ViewportHeight() * scale)}

@@ -149,11 +149,16 @@ func (d *DiffState) prepare() {
 				tops = append(tops, top)
 				// Lines deleted after the last line shown, as from the end
 				// of a text with a final newline, whose empty line after it
-				// is hidden, go under that last line.
+				// is hidden, go under that last line; those of a file
+				// deleted, whose empty text shows none, above its hidden
+				// line.
 				b := block{kind: blockDeleted, height: height, from: h.A0, to: h.A1, hunk: hi}
-				if h.B0 < nB {
+				switch {
+				case h.B0 < nB:
 					b.line = h.B0
-				} else {
+				case nB == 0:
+					b.line = 0
+				default:
 					b.line, b.below = nB-1, true
 				}
 				blkB = append(blkB, b)
@@ -178,12 +183,13 @@ func (d *DiffState) prepare() {
 	// the higher side's line and annotations there, fillers where a side
 	// has no line.
 	type side struct {
-		v    *view
-		blks *[]block
-		ann  map[int]float32
-		n    int
+		v     *view
+		blks  *[]block
+		ann   map[int]float32
+		n     int
+		shown int
 	}
-	sides := [2]side{{viewA, &blkA, anns[DiffOld], viewA.text.LineCount()}, {viewB, &blkB, anns[DiffNew], viewB.text.LineCount()}}
+	sides := [2]side{{viewA, &blkA, anns[DiffOld], viewA.text.LineCount(), nA}, {viewB, &blkB, anns[DiffNew], viewB.text.LineCount(), nB}}
 	emitAnn := func(s side, line int, extra float32) {
 		if extra > 0 && line >= 0 {
 			*s.blks = append(*s.blks, block{kind: blockSpacer, line: line, below: true, height: extra})
@@ -289,6 +295,10 @@ func (d *DiffState) prepare() {
 			switch {
 			case lastLine[s] >= 0:
 				b.line, b.below = lastLine[s], true
+			case sd.shown == 0:
+				// An empty text, which shows no line: above its hidden
+				// one, so that the side ends where the other does.
+				b.line = 0
 			case pos < sd.n && !(s == 0 && nA == 0 && pos == sd.n-1 && sides[0].v.text.Len() == 0):
 				b.line = pos
 			default:
@@ -363,11 +373,18 @@ func (v *view) wrapLineNow(i int) {
 // shownLines returns how many lines of a side's text the diff shows. A
 // diff that cannot be edited ends at the text's final newline, as git
 // diff does, leaving out the empty line the editor starts after it,
-// which its lines, compared with their line feeds, do not count. An
-// editable one shows it, as there is where typing adds a line.
+// which its lines, compared with their line feeds, do not count, and
+// shows none of an empty text, as of a file added or deleted, whose
+// editor keeps that one line. An editable one shows it, as there is
+// where typing adds a line.
 func (d *DiffState) shownLines(text rope.Text) int {
 	n := text.LineCount()
-	if d.Editable || n < 2 || text.LineStart(n-1) != text.Len() {
+	switch {
+	case d.Editable:
+		return n
+	case text.Len() == 0:
+		return 0
+	case n < 2 || text.LineStart(n-1) != text.Len():
 		return n
 	}
 	return n - 1

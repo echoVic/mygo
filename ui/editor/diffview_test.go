@@ -1130,6 +1130,40 @@ func TestDiffLineTop(t *testing.T) {
 	}
 }
 
+// A file added or deleted has an empty side, which shows no line: the diff
+// is as high as the other side's lines, which LineTop of either side's
+// count of lines tells, 0 for the empty one.
+func TestDiffEmptySideShowsNoLine(t *testing.T) {
+	for _, layout := range []DiffLayout{DiffSplit, DiffUnified} {
+		for _, text := range []string{"a\nb\nc\n", "a\nb\nc"} {
+			for _, deleted := range []bool{true, false} {
+				d := &DiffState{Old: NewBuffer(text), New: NewBuffer(""), Layout: layout, FitContent: true}
+				oldN, newN := 3, 0
+				what := "deleted"
+				if !deleted {
+					d.Old, d.New = NewBuffer(""), NewBuffer(text)
+					oldN, newN = 0, 3
+					what = "added"
+				}
+				tt := ui.NewTester(func(c *ui.Context) { DiffView(c, d).FillWidth() }, 800, 600)
+				tt.Frame()
+				tt.Frame()
+				want := 3 * float64(d.eds[1].view.lineHeight)
+				if got := d.ViewportHeight(); got != want {
+					t.Errorf("layout %v, %q %s: the diff is %v high, want %v", layout, text, what, got, want)
+				}
+				if a, b := d.LineTop(DiffOld, oldN), d.LineTop(DiffNew, newN); a != want || b != want {
+					t.Errorf("layout %v, %q %s: the old side ends at %v, the new at %v, want %v", layout, text, what, a, b, want)
+				}
+				// As a minimap takes the height, from the buffer's lines.
+				if a, b := d.LineTop(DiffOld, d.Old.LineCount()), d.LineTop(DiffNew, d.New.LineCount()); a != want || b != want {
+					t.Errorf("layout %v, %q %s: past the buffers' lines, the old side at %v, the new at %v, want %v", layout, text, what, a, b, want)
+				}
+			}
+		}
+	}
+}
+
 // KeepScrollbars shows the diff's thumb with the pointer away, and
 // NoScrollbars takes it away, with its room, on both sides.
 func TestDiffScrollbarsKeptAndHidden(t *testing.T) {
